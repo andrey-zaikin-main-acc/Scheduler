@@ -1,0 +1,20 @@
+"""Shared constants for the production planning MVP."""
+
+ORDER_STATUS_NEW = "Новый"
+ORDER_STATUS_PLANNED = "Запланирован"
+ORDER_STATUS_DONE = "Выполнен"
+ORDER_STATUS_NOT_DONE = "Не выполнен"
+ORDER_STATUS_CONFLICT = "Конфликт планирования"
+ORDER_STATUS_CANCELLED = "Отменён"
+
+PLANNABLE_ORDER_STATUSES = {
+    ORDER_STATUS_NEW,
+    ORDER_STATUS_PLANNED,
+    ORDER_STATUS_NOT_DONE,
+    ORDER_STATUS_CONFLICT,
+}
+
+NON_PLANNABLE_ORDER_STATUSES = {
+    ORDER_STATUS_DONE,
+    ORDER_STATUS_CANCELLED,
+}
