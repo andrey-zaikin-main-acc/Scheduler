@@ -1,6 +1,7 @@
 """In-memory capacity calendar for pure planning calculations."""
 
 from collections import defaultdict
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date
 
@@ -74,6 +75,20 @@ class CapacityCalendar:
             order_ids.update(reservation.order_id for reservation in reservations)
             current = current.fromordinal(current.toordinal() + 1)
         return tuple(sorted(order_ids))
+
+
+    def snapshot(self) -> tuple[dict[tuple[int, date], float], dict[tuple[int, date], list[CapacityReservation]]]:
+        """Return a restorable snapshot of occupied hours and reservations."""
+        return dict(self._occupied_hours), deepcopy(dict(self._reservations))
+
+    def restore(
+        self,
+        snapshot: tuple[dict[tuple[int, date], float], dict[tuple[int, date], list[CapacityReservation]]],
+    ) -> None:
+        """Restore occupied hours and reservations from a snapshot."""
+        occupied_hours, reservations = snapshot
+        self._occupied_hours = defaultdict(float, occupied_hours)
+        self._reservations = defaultdict(list, reservations)
 
     def _get_work_center(self, work_center_id: int) -> PlanningWorkCenter:
         try:

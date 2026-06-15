@@ -35,3 +35,9 @@ class PlanRepository:
         self.session.add(planned_operation)
         self.session.flush()
         return planned_operation
+
+    def add_planned_operation_days(self, days: list[PlannedOperationDay]) -> list[PlannedOperationDay]:
+        """Persist daily planned operation placements."""
+        self.session.add_all(days)
+        self.session.flush()
+        return days

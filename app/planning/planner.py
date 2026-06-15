@@ -41,9 +41,11 @@ class PlanningEngine:
                     reason=str(exc),
                 ),
             )
-        return self._plan_prepared_order(prepared_order)
+        return self.plan_prepared_order(prepared_order)
 
-    def _plan_prepared_order(self, prepared_order: PreparedOrder) -> PlannedOrderResult:
+    def plan_prepared_order(self, prepared_order: PreparedOrder) -> PlannedOrderResult:
+        """Plan a prepared order and rollback its reservations if it conflicts."""
+        snapshot = self.capacity_calendar.snapshot()
         order = prepared_order.order
         earliest_allowed_date = self._earliest_allowed_date(order.shipment_date)
         latest_allowed_date = order.shipment_date
@@ -63,6 +65,7 @@ class PlanningEngine:
                 capacity_calendar=self.capacity_calendar,
             )
             if isinstance(scheduled_or_conflict, PlanningConflict):
+                self.capacity_calendar.restore(snapshot)
                 return PlannedOrderResult(
                     order_id=order.id,
                     calculated_start_date=None,
