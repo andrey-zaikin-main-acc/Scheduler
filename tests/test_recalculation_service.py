@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.constants import ORDER_STATUS_CONFLICT, ORDER_STATUS_NEW, ORDER_STATUS_PLANNED
 from app.db.database import Base
-from app.db.models import Order, PlannedOperation, PlannedOperationDay, PlanningConflict, Route, RouteOperation, WorkCenter
+from app.db.models import Order, PlanChange, PlannedOperation, PlannedOperationDay, PlanningConflict, Route, RouteOperation, WorkCenter
 from app.services.recalculation_service import RecalculationService
 
 
@@ -108,3 +108,39 @@ def test_recalculation_service_clears_previous_plan(session: Session) -> None:
 
     assert session.query(PlannedOperation).count() == 1
     assert session.query(PlannedOperationDay).count() == 1
+
+def test_recalculation_service_records_plan_changes_when_operation_moves(session: Session) -> None:
+    route = create_route_with_operation(session, hours_per_day=8, labor_hours_per_1000=8)
+    first_order = Order(
+        order_number="R-004",
+        client_name="Клиент",
+        product_name="Продукт",
+        quantity=1000,
+        shipment_date=date(2026, 7, 10),
+        route_id=route.id,
+        status=ORDER_STATUS_NEW,
+    )
+    session.add(first_order)
+    session.commit()
+
+    service = RecalculationService(session, planning_start_date=date(2026, 7, 1))
+    service.recalculate_plan()
+
+    second_order = Order(
+        order_number="R-005",
+        client_name="Клиент",
+        product_name="Продукт",
+        quantity=1000,
+        shipment_date=date(2026, 7, 10),
+        route_id=route.id,
+        status=ORDER_STATUS_NEW,
+    )
+    session.add(second_order)
+    session.commit()
+
+    service.recalculate_plan()
+
+    changes = session.query(PlanChange).all()
+    assert any(change.change_type == "order_start_changed" for change in changes)
+    assert any(change.change_type == "operation_moved" for change in changes)
+

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import date
+from app.db.models import utc_now
 
 from sqlalchemy.orm import Session
 
@@ -13,9 +14,11 @@ from app.planning.order_preparation import PreparedOrder, prepare_order, sort_pr
 from app.planning.planner import PlanningEngine
 from app.repositories.conflicts_repository import ConflictsRepository
 from app.repositories.orders_repository import OrdersRepository
+from app.repositories.plan_changes_repository import PlanChangesRepository
 from app.repositories.plan_repository import PlanRepository
 from app.repositories.routes_repository import RoutesRepository
 from app.repositories.work_centers_repository import WorkCentersRepository
+from app.services.plan_diff_service import PlanDiffService
 from app.services.planning_mapper import (
     map_conflict_to_orm,
     map_order_to_planning,
@@ -47,13 +50,18 @@ class RecalculationService:
         self.routes_repository = RoutesRepository(session)
         self.work_centers_repository = WorkCentersRepository(session)
         self.plan_repository = PlanRepository(session)
+        self.plan_changes_repository = PlanChangesRepository(session)
         self.conflicts_repository = ConflictsRepository(session)
+        self.plan_diff_service = PlanDiffService()
 
     def recalculate_plan(self) -> RecalculationSummary:
         """Rebuild the production plan and persist planned operations and conflicts."""
         run = RecalculationRun(status="running", summary="Пересчёт плана запущен")
         self.session.add(run)
         self.session.flush()
+
+        old_operations = list(self.plan_repository.list_planned_operations())
+        old_conflicts = list(self.conflicts_repository.list_conflicts())
 
         self.plan_repository.clear_plan()
         self.conflicts_repository.clear_conflicts()
@@ -94,11 +102,24 @@ class RecalculationService:
                 conflicted_order_count += 1
                 conflict_count += 1
 
+        new_operations = list(self.plan_repository.list_planned_operations())
+        new_conflicts = list(self.conflicts_repository.list_conflicts())
+        changes = self.plan_diff_service.build_changes(
+            recalculation_run_id=run.id,
+            old_operations=old_operations,
+            new_operations=new_operations,
+            old_conflicts=old_conflicts,
+            new_conflicts=new_conflicts,
+        )
+        self.plan_changes_repository.add_changes(changes)
+
         run.status = "completed"
+        run.finished_at = utc_now()
         run.summary = (
             f"Запланировано заказов: {planned_order_count}; "
             f"конфликтов: {conflicted_order_count}; "
-            f"операций: {planned_operation_count}."
+            f"операций: {planned_operation_count}; "
+            f"изменений: {len(changes)}."
         )
         self.session.commit()
 
