@@ -1,0 +1,62 @@
+"""Repository helpers for orders."""
+
+from collections.abc import Sequence
+from datetime import date
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db.models import Order
+
+
+class OrdersRepository:
+    """Data access for orders."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def list_orders(self) -> Sequence[Order]:
+        """Return orders ordered by shipment date and ID."""
+        return self.session.scalars(select(Order).order_by(Order.shipment_date, Order.id)).all()
+
+    def get_order(self, order_id: int) -> Order | None:
+        """Return an order by internal ID."""
+        return self.session.get(Order, order_id)
+
+    def get_by_number(self, order_number: str) -> Order | None:
+        """Return an order by business number."""
+        return self.session.scalar(select(Order).where(Order.order_number == order_number))
+
+    def create_order(
+        self,
+        *,
+        order_number: str,
+        client_name: str,
+        product_name: str,
+        quantity: float,
+        shipment_date: date,
+        route_id: int,
+        status: str,
+    ) -> Order:
+        """Create and persist an order."""
+        order = Order(
+            order_number=order_number,
+            client_name=client_name,
+            product_name=product_name,
+            quantity=quantity,
+            shipment_date=shipment_date,
+            route_id=route_id,
+            status=status,
+        )
+        self.session.add(order)
+        self.session.flush()
+        return order
+
+    def update_status(self, order_id: int, status: str) -> Order | None:
+        """Update order status."""
+        order = self.get_order(order_id)
+        if order is None:
+            return None
+        order.status = status
+        self.session.flush()
+        return order
