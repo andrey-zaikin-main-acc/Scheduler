@@ -1,0 +1,20 @@
+[project]
+name = "production-planner-mvp"
+version = "0.1.0"
+description = "Local MVP for production planning with SQLite and Gantt views."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "plotly>=5.24",
+  "sqlalchemy>=2.0",
+  "streamlit>=1.38",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
