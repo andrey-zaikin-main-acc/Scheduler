@@ -4,6 +4,7 @@ import streamlit as st
 
 from app.ui.pages.common import render_bootstrap_controls
 from app.ui.pages.conflicts_page import render_conflicts_page
+from app.ui.pages.gantt_page import render_gantt_page
 from app.ui.pages.orders_page import render_orders_page
 from app.ui.pages.production_plan_page import render_production_plan_page
 from app.ui.pages.recalculation_results_page import render_recalculation_results_page
@@ -33,6 +34,8 @@ def render_navigation() -> None:
         render_orders_page()
     elif page == "Производственный план":
         render_production_plan_page()
+    elif page == "Диаграмма Ганта":
+        render_gantt_page()
     elif page == "Конфликты":
         render_conflicts_page()
     elif page == "Результаты пересчёта":
