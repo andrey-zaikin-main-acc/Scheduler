@@ -126,16 +126,7 @@ def test_recalculation_service_records_plan_changes_when_operation_moves(session
     service = RecalculationService(session, planning_start_date=date(2026, 7, 1))
     service.recalculate_plan()
 
-    second_order = Order(
-        order_number="R-005",
-        client_name="Клиент",
-        product_name="Продукт",
-        quantity=1000,
-        shipment_date=date(2026, 7, 10),
-        route_id=route.id,
-        status=ORDER_STATUS_NEW,
-    )
-    session.add(second_order)
+    first_order.shipment_date = date(2026, 7, 11)
     session.commit()
 
     service.recalculate_plan()
