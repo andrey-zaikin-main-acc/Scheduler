@@ -9,6 +9,8 @@ from app.ui.pages.gantt_page import render_gantt_page
 from app.ui.pages.orders_page import render_orders_page
 from app.ui.pages.production_plan_page import render_production_plan_page
 from app.ui.pages.recalculation_results_page import render_recalculation_results_page
+from app.ui.pages.routes_page import render_routes_page
+from app.ui.pages.work_centers_page import render_work_centers_page
 
 
 def render_navigation() -> None:
@@ -33,6 +35,10 @@ def render_navigation() -> None:
 
     if page == "Реестр заказов":
         render_orders_page()
+    elif page == "Маршруты":
+        render_routes_page()
+    elif page == "Участки":
+        render_work_centers_page()
     elif page == "Производственный план":
         render_production_plan_page()
     elif page == "Диаграмма Ганта":
@@ -43,11 +49,3 @@ def render_navigation() -> None:
         render_conflicts_page()
     elif page == "Результаты пересчёта":
         render_recalculation_results_page()
-    else:
-        st.info(f"Раздел «{page}» будет реализован в следующих итерациях.")
-        st.markdown(
-            """
-            **Доступно сейчас:** загрузка demo-данных, пересчёт плана, реестр заказов,
-            производственный план, конфликты и результаты пересчёта.
-            """
-        )

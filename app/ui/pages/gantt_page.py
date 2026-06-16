@@ -26,7 +26,7 @@ def render_gantt_page() -> None:
             color_by = "order"
 
     if not rows:
-        st.info("Нет плановых операций для отображения. Загрузите demo-данные и пересчитайте план.")
+        st.info("Нет плановых операций для отображения. Загрузите актуальные данные и пересчитайте план.")
         return
 
     fig = build_gantt_figure(rows, color_by=color_by)
