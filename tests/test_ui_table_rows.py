@@ -33,6 +33,7 @@ def test_order_rows_include_text_client_and_product() -> None:
             "Маршрут": "Маршрут A",
             "Статус": ORDER_STATUS_NEW,
             "Дата запуска": None,
+            "Конфликт": False,
         }
     ]
 

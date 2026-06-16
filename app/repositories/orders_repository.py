@@ -60,3 +60,29 @@ class OrdersRepository:
         order.status = status
         self.session.flush()
         return order
+
+    def update_order(
+        self,
+        order_id: int,
+        *,
+        order_number: str,
+        client_name: str,
+        product_name: str,
+        quantity: float,
+        shipment_date: date,
+        route_id: int,
+        status: str,
+    ) -> Order | None:
+        """Update all editable order fields."""
+        order = self.get_order(order_id)
+        if order is None:
+            return None
+        order.order_number = order_number
+        order.client_name = client_name
+        order.product_name = product_name
+        order.quantity = quantity
+        order.shipment_date = shipment_date
+        order.route_id = route_id
+        order.status = status
+        self.session.flush()
+        return order

@@ -1,6 +1,6 @@
 """Table row builders for Streamlit pages."""
 
-from app.db.models import Order, PlannedOperation, PlannedOperationDay, PlanningConflict, RecalculationRun
+from app.db.models import Order, PlanChange, PlannedOperation, PlannedOperationDay, PlanningConflict, RecalculationRun
 
 
 def order_rows(orders: list[Order]) -> list[dict[str, object]]:
@@ -16,6 +16,7 @@ def order_rows(orders: list[Order]) -> list[dict[str, object]]:
             "Маршрут": order.route.name if order.route else None,
             "Статус": order.status,
             "Дата запуска": order.calculated_start_date,
+            "Конфликт": bool(order.conflicts),
         }
         for order in orders
     ]
@@ -79,4 +80,21 @@ def recalculation_rows(runs: list[RecalculationRun]) -> list[dict[str, object]]:
             "Итог": run.summary,
         }
         for run in runs
+    ]
+
+
+def plan_change_rows(changes: list[PlanChange]) -> list[dict[str, object]]:
+    """Build display rows for saved recalculation changes."""
+    return [
+        {
+            "Тип": change.change_type,
+            "Заказ": change.order_id,
+            "Операция": change.planned_operation_id,
+            "Старый старт": change.old_start_date,
+            "Старое окончание": change.old_end_date,
+            "Новый старт": change.new_start_date,
+            "Новое окончание": change.new_end_date,
+            "Описание": change.description,
+        }
+        for change in changes
     ]
