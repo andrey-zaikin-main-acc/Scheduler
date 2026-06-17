@@ -1,6 +1,16 @@
 """Table row builders for Streamlit pages."""
 
-from app.db.models import Order, PlanChange, PlannedOperation, PlannedOperationDay, PlanningConflict, RecalculationRun
+from app.db.models import (
+    Order,
+    PlanChange,
+    PlannedOperation,
+    PlannedOperationDay,
+    PlanningConflict,
+    RecalculationRun,
+    Route,
+    RouteOperation,
+    WorkCenter,
+)
 
 
 def order_rows(orders: list[Order]) -> list[dict[str, object]]:
@@ -22,13 +32,62 @@ def order_rows(orders: list[Order]) -> list[dict[str, object]]:
     ]
 
 
-def planned_operation_rows(planned_operations: list[PlannedOperation]) -> list[dict[str, object]]:
+def work_center_rows(work_centers: list[WorkCenter]) -> list[dict[str, object]]:
+    """Build display rows for work centers."""
+    return [
+        {
+            "ID": item.id,
+            "Название": item.name,
+            "Доступные часы в день": item.available_hours_per_day,
+            "Активен": item.is_active,
+        }
+        for item in work_centers
+    ]
+
+
+def route_rows(routes: list[Route]) -> list[dict[str, object]]:
+    """Build display rows for routes."""
+    return [
+        {
+            "ID": route.id,
+            "Название": route.name,
+            "Описание": route.description or "",
+            "Активен": route.is_active,
+            "Операций": len(route.operations),
+        }
+        for route in routes
+    ]
+
+
+def route_operation_rows(operations: list[RouteOperation]) -> list[dict[str, object]]:
+    """Build display rows for route operations."""
+    return [
+        {
+            "ID": operation.id,
+            "№": operation.sequence_number,
+            "Участок": operation.work_center.name if operation.work_center else None,
+            "Трудоёмкость на 1000": operation.labor_hours_per_1000,
+            "Мин. передаточная партия": operation.min_transfer_quantity_to_next or 0.0,
+        }
+        for operation in operations
+    ]
+
+
+def planned_operation_rows(
+    planned_operations: list[PlannedOperation],
+) -> list[dict[str, object]]:
     """Build display rows for planned operation aggregates."""
     return [
         {
-            "Заказ": operation.order.order_number if operation.order else operation.order_id,
+            "Заказ": (
+                operation.order.order_number if operation.order else operation.order_id
+            ),
             "Операция": operation.sequence_number,
-            "Участок": operation.work_center.name if operation.work_center else operation.work_center_id,
+            "Участок": (
+                operation.work_center.name
+                if operation.work_center
+                else operation.work_center_id
+            ),
             "Дата начала": operation.planned_start_date,
             "Дата окончания": operation.planned_end_date,
             "Требуется часов": round(operation.required_hours, 2),
@@ -39,7 +98,9 @@ def planned_operation_rows(planned_operations: list[PlannedOperation]) -> list[d
     ]
 
 
-def planned_operation_day_rows(days: list[PlannedOperationDay]) -> list[dict[str, object]]:
+def planned_operation_day_rows(
+    days: list[PlannedOperationDay],
+) -> list[dict[str, object]]:
     """Build display rows for daily operation placements."""
     return [
         {
@@ -56,9 +117,15 @@ def conflict_rows(conflicts: list[PlanningConflict]) -> list[dict[str, object]]:
     """Build display rows for planning conflicts."""
     return [
         {
-            "Заказ": conflict.order.order_number if conflict.order else conflict.order_id,
+            "Заказ": (
+                conflict.order.order_number if conflict.order else conflict.order_id
+            ),
             "Срок отгрузки": conflict.shipment_date,
-            "Ограничивающий участок": conflict.work_center.name if conflict.work_center else conflict.work_center_id,
+            "Ограничивающий участок": (
+                conflict.work_center.name
+                if conflict.work_center
+                else conflict.work_center_id
+            ),
             "Требуется часов": round(conflict.required_hours, 2),
             "Доступно часов": round(conflict.available_hours, 2),
             "Дефицит часов": round(conflict.deficit_hours, 2),
