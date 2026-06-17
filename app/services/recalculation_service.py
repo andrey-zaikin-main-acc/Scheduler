@@ -6,7 +6,7 @@ from datetime import date
 from sqlalchemy.orm import Session
 
 from app.constants import ORDER_STATUS_CONFLICT, ORDER_STATUS_PLANNED, PLANNABLE_ORDER_STATUSES
-from app.db.models import Order, RecalculationRun
+from app.db.models import Order, PlanChange, PlannedOperation, RecalculationRun, utc_now
 from app.planning.capacity_calendar import CapacityCalendar
 from app.planning.entities import PlannedOrderResult, PlanningConflict, PlanningRouteOperation
 from app.planning.order_preparation import PreparedOrder, prepare_order, sort_prepared_orders
@@ -55,6 +55,7 @@ class RecalculationService:
         self.session.add(run)
         self.session.flush()
 
+        previous_plan = self._current_plan_snapshot()
         self.plan_repository.clear_plan()
         self.conflicts_repository.clear_conflicts()
 
@@ -94,6 +95,10 @@ class RecalculationService:
                 conflicted_order_count += 1
                 conflict_count += 1
 
+        self.session.flush()
+        self._persist_plan_changes(run.id, previous_plan, self._current_plan_snapshot())
+
+        run.finished_at = utc_now()
         run.status = "completed"
         run.summary = (
             f"Запланировано заказов: {planned_order_count}; "
@@ -158,3 +163,50 @@ class RecalculationService:
             order.status = ORDER_STATUS_CONFLICT
             order.calculated_start_date = None
         self.conflicts_repository.add_conflict(map_conflict_to_orm(result.conflict))
+
+    def _current_plan_snapshot(self) -> dict[tuple[int, int], tuple[date, date]]:
+        operations = self.session.query(PlannedOperation).all()
+        return {
+            (operation.order_id, operation.sequence_number): (
+                operation.planned_start_date,
+                operation.planned_end_date,
+            )
+            for operation in operations
+        }
+
+    def _persist_plan_changes(
+        self,
+        recalculation_run_id: int,
+        previous_plan: dict[tuple[int, int], tuple[date, date]],
+        new_plan: dict[tuple[int, int], tuple[date, date]],
+    ) -> None:
+        all_keys = sorted(set(previous_plan) | set(new_plan))
+        for order_id, sequence_number in all_keys:
+            old_dates = previous_plan.get((order_id, sequence_number))
+            new_dates = new_plan.get((order_id, sequence_number))
+            if old_dates == new_dates:
+                continue
+            if old_dates is None:
+                change_type = "created"
+                description = f"Операция {sequence_number} заказа {order_id} добавлена в план."
+            elif new_dates is None:
+                change_type = "removed"
+                description = f"Операция {sequence_number} заказа {order_id} удалена из плана."
+            else:
+                change_type = "rescheduled"
+                description = (
+                    f"Операция {sequence_number} заказа {order_id} перенесена "
+                    f"с {old_dates[0]}–{old_dates[1]} на {new_dates[0]}–{new_dates[1]}."
+                )
+            self.session.add(
+                PlanChange(
+                    recalculation_run_id=recalculation_run_id,
+                    order_id=order_id,
+                    change_type=change_type,
+                    old_start_date=old_dates[0] if old_dates else None,
+                    old_end_date=old_dates[1] if old_dates else None,
+                    new_start_date=new_dates[0] if new_dates else None,
+                    new_end_date=new_dates[1] if new_dates else None,
+                    description=description,
+                )
+            )

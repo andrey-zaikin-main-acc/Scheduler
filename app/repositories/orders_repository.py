@@ -3,10 +3,10 @@
 from collections.abc import Sequence
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Order
+from app.db.models import Order, PlanChange, PlannedOperation, PlannedOperationDay, PlanningConflict
 
 
 class OrdersRepository:
@@ -60,3 +60,40 @@ class OrdersRepository:
         order.status = status
         self.session.flush()
         return order
+
+    def update_order(
+        self,
+        order_id: int,
+        *,
+        order_number: str,
+        client_name: str,
+        product_name: str,
+        quantity: float,
+        shipment_date: date,
+        route_id: int,
+        status: str,
+    ) -> Order | None:
+        """Update all editable order fields."""
+        order = self.get_order(order_id)
+        if order is None:
+            return None
+        order.order_number = order_number
+        order.client_name = client_name
+        order.product_name = product_name
+        order.quantity = quantity
+        order.shipment_date = shipment_date
+        order.route_id = route_id
+        order.status = status
+        self.session.flush()
+        return order
+
+    def delete_order(self, order_id: int) -> bool:
+        """Physically delete an order and persisted planning rows tied to it."""
+        planned_operation_ids = select(PlannedOperation.id).where(PlannedOperation.order_id == order_id)
+        self.session.execute(delete(PlanChange).where(PlanChange.order_id == order_id))
+        self.session.execute(delete(PlannedOperationDay).where(PlannedOperationDay.planned_operation_id.in_(planned_operation_ids)))
+        self.session.execute(delete(PlannedOperation).where(PlannedOperation.order_id == order_id))
+        self.session.execute(delete(PlanningConflict).where(PlanningConflict.order_id == order_id))
+        result = self.session.execute(delete(Order).where(Order.id == order_id))
+        self.session.flush()
+        return bool(result.rowcount)
