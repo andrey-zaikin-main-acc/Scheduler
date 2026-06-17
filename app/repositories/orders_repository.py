@@ -86,14 +86,3 @@ class OrdersRepository:
         order.status = status
         self.session.flush()
         return order
-
-    def delete_order(self, order_id: int) -> bool:
-        """Physically delete an order and persisted planning rows tied to it."""
-        planned_operation_ids = select(PlannedOperation.id).where(PlannedOperation.order_id == order_id)
-        self.session.execute(delete(PlanChange).where(PlanChange.order_id == order_id))
-        self.session.execute(delete(PlannedOperationDay).where(PlannedOperationDay.planned_operation_id.in_(planned_operation_ids)))
-        self.session.execute(delete(PlannedOperation).where(PlannedOperation.order_id == order_id))
-        self.session.execute(delete(PlanningConflict).where(PlanningConflict.order_id == order_id))
-        result = self.session.execute(delete(Order).where(Order.id == order_id))
-        self.session.flush()
-        return bool(result.rowcount)
