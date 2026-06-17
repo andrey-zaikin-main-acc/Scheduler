@@ -33,6 +33,8 @@ ORDER_STATUSES = [
 def render_orders_page() -> None:
     """Render the orders registry and order editing controls."""
     st.header("Реестр заказов")
+    st.caption("Редактируйте значения прямо в таблице. После изменения заказ автоматически сохраняется, а план пересчитывается.")
+
     with SessionLocal() as session:
         repository = OrdersRepository(session)
         routes = list(session.scalars(select(Route).where(Route.is_active.is_(True)).order_by(Route.name)).all())
