@@ -2,10 +2,15 @@
 
 from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import delete, exists, select
 from sqlalchemy.orm import Session
 
-from app.db.models import WorkCenter
+from app.db.models import (
+    PlannedOperation,
+    PlannedOperationDay,
+    RouteOperation,
+    WorkCenter,
+)
 
 
 class WorkCentersRepository:
@@ -18,9 +23,15 @@ class WorkCentersRepository:
         """Return active and inactive work centers ordered by name."""
         return self.session.scalars(select(WorkCenter).order_by(WorkCenter.name)).all()
 
-    def create_work_center(self, *, name: str, available_hours_per_day: float) -> WorkCenter:
+    def create_work_center(
+        self, *, name: str, available_hours_per_day: float, is_active: bool = True
+    ) -> WorkCenter:
         """Create a work center with positive daily capacity."""
-        work_center = WorkCenter(name=name, available_hours_per_day=available_hours_per_day)
+        work_center = WorkCenter(
+            name=name,
+            available_hours_per_day=available_hours_per_day,
+            is_active=is_active,
+        )
         self.session.add(work_center)
         self.session.flush()
         return work_center
@@ -42,3 +53,24 @@ class WorkCentersRepository:
         work_center.is_active = is_active
         self.session.flush()
         return work_center
+
+    def work_center_has_dependencies(self, work_center_id: int) -> bool:
+        """Return whether a work center is referenced by routes or saved plan rows."""
+        checks = (
+            select(exists().where(RouteOperation.work_center_id == work_center_id)),
+            select(exists().where(PlannedOperation.work_center_id == work_center_id)),
+            select(
+                exists().where(PlannedOperationDay.work_center_id == work_center_id)
+            ),
+        )
+        return any(bool(self.session.scalar(statement)) for statement in checks)
+
+    def delete_work_center(self, work_center_id: int) -> bool:
+        """Delete a work center only when no route or plan rows reference it."""
+        if self.work_center_has_dependencies(work_center_id):
+            return False
+        result = self.session.execute(
+            delete(WorkCenter).where(WorkCenter.id == work_center_id)
+        )
+        self.session.flush()
+        return bool(result.rowcount)

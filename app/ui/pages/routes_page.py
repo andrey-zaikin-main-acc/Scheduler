@@ -1,170 +1,452 @@
 """Technological routes directory page."""
 
+from typing import Any
+
 import streamlit as st
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 from app.db.database import SessionLocal
-from app.db.models import Route, RouteOperation
+from app.db.models import Route, RouteOperation, WorkCenter
 from app.repositories.routes_repository import RoutesRepository
 from app.repositories.work_centers_repository import WorkCentersRepository
+from app.ui.components.tables import route_operation_rows, route_rows
 from app.ui.pages.page_utils import recalculate_after_save
+
+ROUTE_COLUMNS = ["Выбран", "ID", "Название", "Описание", "Активен", "Операций"]
+OPERATION_COLUMNS = [
+    "Выбран",
+    "ID",
+    "№",
+    "Участок",
+    "Трудоёмкость на 1000",
+    "Мин. передаточная партия",
+]
+DRAFT_ROUTE_SESSION_KEY = "routes_page_has_draft_route"
+SELECTED_ROUTE_SESSION_KEY = "routes_page_selected_route_id"
+ROUTE_EDITOR_KEY = "routes_page_route_editor"
+DRAFT_OPERATION_SESSION_KEY = "routes_page_has_draft_operation"
+SELECTED_OPERATION_SESSION_KEY = "routes_page_selected_operation_id"
+OPERATION_EDITOR_KEY = "routes_page_operation_editor"
 
 
 def render_routes_page() -> None:
-    """Render CRUD controls for routes and route operations."""
+    """Render routes and route operations with inline editing controls."""
     st.header("Справочник маршрутов")
+    st.caption(
+        "Редактируйте маршруты и операции прямо в таблицах. После изменений план автоматически пересчитывается."
+    )
+
     with SessionLocal() as session:
         routes_repository = RoutesRepository(session)
         work_centers = list(WorkCentersRepository(session).list_work_centers())
-        routes = list(
-            session.scalars(
-                select(Route).options(selectinload(Route.operations).selectinload(RouteOperation.work_center)).order_by(Route.name)
-            ).all()
-        )
+        routes = list(routes_repository.list_routes_with_operations())
+        selected_route_id = _normalize_selected_route(routes)
 
-        if routes:
-            st.dataframe(
-                [
-                    {
-                        "ID": route.id,
-                        "Название": route.name,
-                        "Описание": route.description,
-                        "Активен": route.is_active,
-                        "Операций": len(route.operations),
-                    }
-                    for route in routes
-                ],
+        add_col, delete_col = st.columns(2)
+        with add_col:
+            if st.button("Добавить маршрут", use_container_width=True):
+                st.session_state[DRAFT_ROUTE_SESSION_KEY] = True
+                st.rerun()
+        with delete_col:
+            if st.button(
+                "Удалить маршрут",
                 use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.info("Маршруты пока не заведены.")
-
-        with st.expander("Создать маршрут", expanded=not routes):
-            with st.form("create_route"):
-                name = st.text_input("Название")
-                description = st.text_area("Описание")
-                submitted = st.form_submit_button("Создать")
-            if submitted:
-                if not name.strip():
-                    st.error("Название маршрута обязательно.")
-                else:
-                    routes_repository.create_route(name=name.strip(), description=description.strip() or None)
-                    session.commit()
-                    st.success("Маршрут создан. Добавьте хотя бы одну операцию для планирования.")
-                    st.rerun()
-
-        if routes:
-            selected_id = st.selectbox(
-                "Маршрут для редактирования",
-                options=[route.id for route in routes],
-                format_func=lambda item_id: next(route.name for route in routes if route.id == item_id),
-            )
-            selected = next(route for route in routes if route.id == selected_id)
-
-            with st.expander("Редактировать маршрут", expanded=True):
-                with st.form("edit_route"):
-                    name = st.text_input("Название", value=selected.name)
-                    description = st.text_area("Описание", value=selected.description or "")
-                    is_active = st.checkbox("Активен", value=selected.is_active)
-                    submitted = st.form_submit_button("Сохранить и пересчитать")
-                if submitted:
-                    if not name.strip():
-                        st.error("Название маршрута обязательно.")
-                    else:
-                        routes_repository.update_route(
-                            selected.id,
-                            name=name.strip(),
-                            description=description.strip() or None,
-                            is_active=is_active,
-                        )
+                disabled=selected_route_id is None,
+            ):
+                if selected_route_id is not None:
+                    if routes_repository.delete_route(int(selected_route_id)):
                         session.commit()
                         recalculate_after_save(session)
+                        st.session_state[SELECTED_ROUTE_SESSION_KEY] = None
+                        st.session_state[DRAFT_ROUTE_SESSION_KEY] = False
+                        st.session_state[DRAFT_OPERATION_SESSION_KEY] = False
                         st.rerun()
+                    st.error("Маршрут используется в заказах и не может быть удалён.")
 
-            st.subheader("Операции маршрута")
-            if selected.operations:
-                st.dataframe(
-                    [
-                        {
-                            "ID": operation.id,
-                            "№": operation.sequence_number,
-                            "Участок": operation.work_center.name if operation.work_center else operation.work_center_id,
-                            "Трудоёмкость на 1000": operation.labor_hours_per_1000,
-                            "Мин. передаточная партия": operation.min_transfer_quantity_to_next,
-                        }
-                        for operation in selected.operations
-                    ],
-                    use_container_width=True,
-                    hide_index=True,
-                )
-            else:
-                st.warning("У маршрута нет операций. Заказы с таким маршрутом попадут в конфликт до добавления операций.")
+        route_rows_data = build_route_editor_rows(
+            routes,
+            selected_id=selected_route_id,
+            include_draft=bool(st.session_state.get(DRAFT_ROUTE_SESSION_KEY)),
+        )
+        if not route_rows_data:
+            st.info("Маршруты пока не заведены. Нажмите «Добавить маршрут».")
+            return
+        edited_routes = st.data_editor(
+            route_rows_data,
+            key=ROUTE_EDITOR_KEY,
+            use_container_width=True,
+            hide_index=True,
+            disabled=["ID", "Операций"],
+            column_order=ROUTE_COLUMNS,
+            num_rows="fixed",
+            column_config={
+                "Выбран": st.column_config.CheckboxColumn(
+                    "Выбран", help="Отметьте один маршрут."
+                ),
+                "ID": st.column_config.NumberColumn("ID", disabled=True),
+                "Активен": st.column_config.CheckboxColumn("Активен"),
+                "Операций": st.column_config.NumberColumn("Операций", disabled=True),
+            },
+        )
+        _process_route_changes(session, routes_repository, routes, edited_routes)
 
-            if not work_centers:
-                st.info("Сначала создайте хотя бы один участок.")
-                return
+        selected_route_id = st.session_state.get(SELECTED_ROUTE_SESSION_KEY)
+        selected_route = next(
+            (route for route in routes if route.id == selected_route_id), None
+        )
+        if selected_route is not None:
+            _render_operations_table(
+                session, routes_repository, selected_route, work_centers
+            )
 
-            with st.expander("Добавить операцию"):
-                with st.form("add_route_operation"):
-                    sequence_number = st.number_input("Порядковый номер", min_value=1, value=len(selected.operations) + 1, step=1)
-                    work_center_id = st.selectbox(
-                        "Участок",
-                        options=[item.id for item in work_centers],
-                        format_func=lambda item_id: next(item.name for item in work_centers if item.id == item_id),
-                    )
-                    labor = st.number_input("Трудоёмкость на 1000 шт.", min_value=0.01, value=1.0, step=0.5)
-                    transfer = st.number_input("Мин. передаточная партия к следующей операции", min_value=0.0, value=0.0, step=100.0)
-                    submitted = st.form_submit_button("Добавить и пересчитать")
-                if submitted:
-                    routes_repository.add_operation(
-                        route_id=selected.id,
-                        sequence_number=int(sequence_number),
-                        work_center_id=int(work_center_id),
-                        labor_hours_per_1000=float(labor),
-                        min_transfer_quantity_to_next=float(transfer) if transfer > 0 else None,
-                    )
+
+def _render_operations_table(
+    session, repository: RoutesRepository, route: Route, work_centers: list[WorkCenter]
+) -> None:
+    st.subheader(f"Операции маршрута: {route.name}")
+    if not work_centers:
+        st.warning("Сначала создайте хотя бы один участок")
+        return
+    selected_operation_id = _normalize_selected_operation(route.operations)
+    add_col, delete_col = st.columns(2)
+    with add_col:
+        if st.button("Добавить операцию", use_container_width=True):
+            st.session_state[DRAFT_OPERATION_SESSION_KEY] = True
+            st.rerun()
+    with delete_col:
+        if st.button(
+            "Удалить операцию",
+            use_container_width=True,
+            disabled=selected_operation_id is None,
+        ):
+            if selected_operation_id is not None:
+                if repository.delete_operation_safe(int(selected_operation_id)):
                     session.commit()
                     recalculate_after_save(session)
+                    st.session_state[SELECTED_OPERATION_SESSION_KEY] = None
+                    st.session_state[DRAFT_OPERATION_SESSION_KEY] = False
                     st.rerun()
+                st.error("Операция используется в плане и не может быть удалена.")
 
-            if selected.operations:
-                with st.expander("Редактировать операцию"):
-                    operation_id = st.selectbox(
-                        "Операция",
-                        options=[operation.id for operation in selected.operations],
-                        format_func=lambda item_id: str(next(operation.sequence_number for operation in selected.operations if operation.id == item_id)),
-                    )
-                    operation = next(operation for operation in selected.operations if operation.id == operation_id)
-                    with st.form("edit_route_operation"):
-                        sequence_number = st.number_input("Порядковый номер", min_value=1, value=operation.sequence_number, step=1)
-                        work_center_id = st.selectbox(
-                            "Участок",
-                            options=[item.id for item in work_centers],
-                            index=[item.id for item in work_centers].index(operation.work_center_id),
-                            format_func=lambda item_id: next(item.name for item in work_centers if item.id == item_id),
-                        )
-                        labor = st.number_input("Трудоёмкость на 1000 шт.", min_value=0.01, value=float(operation.labor_hours_per_1000), step=0.5)
-                        transfer = st.number_input(
-                            "Мин. передаточная партия к следующей операции",
-                            min_value=0.0,
-                            value=float(operation.min_transfer_quantity_to_next or 0.0),
-                            step=100.0,
-                        )
-                        delete = st.checkbox("Удалить операцию")
-                        submitted = st.form_submit_button("Сохранить и пересчитать")
-                    if submitted:
-                        if delete:
-                            routes_repository.delete_operation(operation.id)
-                        else:
-                            routes_repository.update_operation(
-                                operation.id,
-                                sequence_number=int(sequence_number),
-                                work_center_id=int(work_center_id),
-                                labor_hours_per_1000=float(labor),
-                                min_transfer_quantity_to_next=float(transfer) if transfer > 0 else None,
-                            )
-                        session.commit()
-                        recalculate_after_save(session)
-                        st.rerun()
+    work_center_by_name = {item.name: item for item in work_centers}
+    rows = build_operation_editor_rows(
+        route.operations,
+        selected_id=selected_operation_id,
+        include_draft=bool(st.session_state.get(DRAFT_OPERATION_SESSION_KEY)),
+    )
+    if not rows:
+        st.warning("У маршрута нет операций. Нажмите «Добавить операцию».")
+        return
+    edited_rows = st.data_editor(
+        rows,
+        key=f"{OPERATION_EDITOR_KEY}_{route.id}",
+        use_container_width=True,
+        hide_index=True,
+        disabled=["ID"],
+        column_order=OPERATION_COLUMNS,
+        num_rows="fixed",
+        column_config={
+            "Выбран": st.column_config.CheckboxColumn(
+                "Выбран", help="Отметьте одну операцию для удаления."
+            ),
+            "ID": st.column_config.NumberColumn("ID", disabled=True),
+            "№": st.column_config.NumberColumn("№", min_value=1, step=1),
+            "Участок": st.column_config.SelectboxColumn(
+                "Участок", options=list(work_center_by_name)
+            ),
+            "Трудоёмкость на 1000": st.column_config.NumberColumn(
+                "Трудоёмкость на 1000", min_value=0.01, step=0.5
+            ),
+            "Мин. передаточная партия": st.column_config.NumberColumn(
+                "Мин. передаточная партия", min_value=0.0, step=100.0
+            ),
+        },
+    )
+    _process_operation_changes(
+        session, repository, route, edited_rows, work_center_by_name
+    )
+
+
+def build_route_editor_rows(
+    routes: list[Route], *, selected_id: int | None, include_draft: bool
+) -> list[dict[str, Any]]:
+    rows = [
+        {"Выбран": route.id == selected_id, **row}
+        for route, row in zip(routes, route_rows(routes), strict=True)
+    ]
+    if include_draft:
+        rows.append(
+            {
+                "Выбран": False,
+                "ID": None,
+                "Название": "",
+                "Описание": "",
+                "Активен": True,
+                "Операций": 0,
+            }
+        )
+    return rows
+
+
+def build_operation_editor_rows(
+    operations: list[RouteOperation], *, selected_id: int | None, include_draft: bool
+) -> list[dict[str, Any]]:
+    rows = [
+        {"Выбран": op.id == selected_id, **row}
+        for op, row in zip(operations, route_operation_rows(operations), strict=True)
+    ]
+    if include_draft:
+        rows.append(
+            {
+                "Выбран": False,
+                "ID": None,
+                "№": (max([op.sequence_number for op in operations], default=0) + 1),
+                "Участок": None,
+                "Трудоёмкость на 1000": 0.0,
+                "Мин. передаточная партия": 0.0,
+            }
+        )
+    return rows
+
+
+def validate_route_row(
+    row: dict[str, Any], *, existing_names: dict[str, int], current_id: int | None
+) -> list[str]:
+    errors = []
+    name = str(row.get("Название") or "").strip()
+    if not name:
+        errors.append("Название маршрута обязательно.")
+    duplicate_id = existing_names.get(name)
+    if duplicate_id is not None and duplicate_id != current_id:
+        errors.append("Маршрут с таким названием уже существует.")
+    if not isinstance(row.get("Активен"), bool):
+        errors.append("Активен должен быть bool.")
+    return errors
+
+
+def validate_operation_row(
+    row: dict[str, Any],
+    *,
+    work_center_names: set[str],
+    existing_numbers: dict[int, int],
+    current_id: int | None,
+) -> list[str]:
+    errors = []
+    number = _parse_int(row.get("№"))
+    labor = _parse_float(row.get("Трудоёмкость на 1000"))
+    transfer = _parse_float(row.get("Мин. передаточная партия"))
+    wc = row.get("Участок")
+    if number is None or number <= 0:
+        errors.append("Номер операции обязателен и должен быть больше 0.")
+    elif (
+        existing_numbers.get(number) is not None
+        and existing_numbers[number] != current_id
+    ):
+        errors.append("Номер операции должен быть уникален внутри маршрута.")
+    if not wc or wc not in work_center_names:
+        errors.append("Участок обязателен.")
+    if labor is None or labor <= 0:
+        errors.append("Трудоёмкость должна быть больше 0.")
+    if transfer is None or transfer < 0:
+        errors.append("Минимальная передаточная партия не должна быть меньше 0.")
+    return errors
+
+
+def _process_route_changes(
+    session,
+    repository: RoutesRepository,
+    routes: list[Route],
+    edited_rows: list[dict[str, Any]],
+) -> None:
+    original_by_id = {route.id: route for route in routes}
+    existing_names = {route.name: route.id for route in routes}
+    selected_ids = [
+        int(row["ID"])
+        for row in edited_rows
+        if row.get("Выбран") and row.get("ID") is not None
+    ]
+    selected_id = selected_ids[-1] if selected_ids else None
+    if selected_id != st.session_state.get(SELECTED_ROUTE_SESSION_KEY):
+        st.session_state[SELECTED_ROUTE_SESSION_KEY] = selected_id
+        st.session_state[SELECTED_OPERATION_SESSION_KEY] = None
+        st.rerun()
+    for row in edited_rows:
+        route_id = row.get("ID")
+        if route_id is None:
+            if _is_blank_route_draft_row(row):
+                st.warning(
+                    "Новая строка ещё не заполнена: укажите название, чтобы создать маршрут."
+                )
+                return
+            errors = validate_route_row(
+                row, existing_names=existing_names, current_id=None
+            )
+            if errors:
+                for error in errors:
+                    st.error(error)
+                return
+            route = repository.create_route(**_route_row_to_payload(row))
+            session.commit()
+            recalculate_after_save(session)
+            st.session_state[DRAFT_ROUTE_SESSION_KEY] = False
+            st.session_state[SELECTED_ROUTE_SESSION_KEY] = route.id
+            st.rerun()
+        route = original_by_id.get(int(route_id))
+        if route is not None and _route_row_changed(row, route):
+            errors = validate_route_row(
+                row, existing_names=existing_names, current_id=route.id
+            )
+            if errors:
+                for error in errors:
+                    st.error(error)
+                return
+            repository.update_route(route.id, **_route_row_to_payload(row))
+            session.commit()
+            recalculate_after_save(session)
+            st.rerun()
+
+
+def _process_operation_changes(
+    session,
+    repository: RoutesRepository,
+    route: Route,
+    edited_rows: list[dict[str, Any]],
+    work_center_by_name: dict[str, WorkCenter],
+) -> None:
+    original_by_id = {op.id: op for op in route.operations}
+    existing_numbers = {op.sequence_number: op.id for op in route.operations}
+    selected_ids = [
+        int(row["ID"])
+        for row in edited_rows
+        if row.get("Выбран") and row.get("ID") is not None
+    ]
+    selected_id = selected_ids[-1] if selected_ids else None
+    if selected_id != st.session_state.get(SELECTED_OPERATION_SESSION_KEY):
+        st.session_state[SELECTED_OPERATION_SESSION_KEY] = selected_id
+        st.rerun()
+    for row in edited_rows:
+        operation_id = row.get("ID")
+        if operation_id is None:
+            if _is_blank_operation_draft_row(row):
+                st.warning("Новая строка операции ещё не заполнена.")
+                return
+            errors = validate_operation_row(
+                row,
+                work_center_names=set(work_center_by_name),
+                existing_numbers=existing_numbers,
+                current_id=None,
+            )
+            if errors:
+                for error in errors:
+                    st.error(error)
+                return
+            repository.add_operation(
+                route_id=route.id, **_operation_row_to_payload(row, work_center_by_name)
+            )
+            session.commit()
+            recalculate_after_save(session)
+            st.session_state[DRAFT_OPERATION_SESSION_KEY] = False
+            st.rerun()
+        operation = original_by_id.get(int(operation_id))
+        if operation is not None and _operation_row_changed(row, operation):
+            errors = validate_operation_row(
+                row,
+                work_center_names=set(work_center_by_name),
+                existing_numbers=existing_numbers,
+                current_id=operation.id,
+            )
+            if errors:
+                for error in errors:
+                    st.error(error)
+                return
+            repository.update_operation(
+                operation.id, **_operation_row_to_payload(row, work_center_by_name)
+            )
+            session.commit()
+            recalculate_after_save(session)
+            st.rerun()
+
+
+def _route_row_to_payload(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": str(row["Название"]).strip(),
+        "description": str(row.get("Описание") or "").strip() or None,
+        "is_active": bool(row["Активен"]),
+    }
+
+
+def _operation_row_to_payload(
+    row: dict[str, Any], work_center_by_name: dict[str, WorkCenter]
+) -> dict[str, Any]:
+    transfer = float(row.get("Мин. передаточная партия") or 0)
+    return {
+        "sequence_number": int(row["№"]),
+        "work_center_id": work_center_by_name[str(row["Участок"])].id,
+        "labor_hours_per_1000": float(row["Трудоёмкость на 1000"]),
+        "min_transfer_quantity_to_next": transfer if transfer > 0 else None,
+    }
+
+
+def _route_row_changed(row: dict[str, Any], route: Route) -> bool:
+    return any(
+        [
+            str(row.get("Название") or "").strip() != route.name,
+            str(row.get("Описание") or "").strip() != (route.description or ""),
+            bool(row.get("Активен")) != route.is_active,
+        ]
+    )
+
+
+def _operation_row_changed(row: dict[str, Any], operation: RouteOperation) -> bool:
+    transfer = _parse_float(row.get("Мин. передаточная партия")) or 0.0
+    return any(
+        [
+            _parse_int(row.get("№")) != operation.sequence_number,
+            row.get("Участок")
+            != (operation.work_center.name if operation.work_center else None),
+            _parse_float(row.get("Трудоёмкость на 1000"))
+            != float(operation.labor_hours_per_1000),
+            (transfer if transfer > 0 else None)
+            != operation.min_transfer_quantity_to_next,
+        ]
+    )
+
+
+def _is_blank_route_draft_row(row: dict[str, Any]) -> bool:
+    return (
+        not str(row.get("Название") or "").strip()
+        and not str(row.get("Описание") or "").strip()
+    )
+
+
+def _is_blank_operation_draft_row(row: dict[str, Any]) -> bool:
+    return not row.get("Участок") and not _parse_float(row.get("Трудоёмкость на 1000"))
+
+
+def _normalize_selected_route(routes: list[Route]) -> int | None:
+    selected_id = st.session_state.get(SELECTED_ROUTE_SESSION_KEY)
+    if selected_id not in {route.id for route in routes}:
+        selected_id = None
+        st.session_state[SELECTED_ROUTE_SESSION_KEY] = None
+    return selected_id
+
+
+def _normalize_selected_operation(operations: list[RouteOperation]) -> int | None:
+    selected_id = st.session_state.get(SELECTED_OPERATION_SESSION_KEY)
+    if selected_id not in {op.id for op in operations}:
+        selected_id = None
+        st.session_state[SELECTED_OPERATION_SESSION_KEY] = None
+    return selected_id
+
+
+def _parse_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
