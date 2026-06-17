@@ -36,3 +36,18 @@ def test_capacity_calendar_returns_blocking_orders() -> None:
         start_date=date(2026, 7, 8),
         end_date=date(2026, 7, 10),
     ) == (101, 102)
+
+
+def test_capacity_calendar_assigns_non_overlapping_latest_intraday_intervals() -> None:
+    calendar = CapacityCalendar([PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)])
+    day = date(2026, 7, 10)
+
+    first = calendar.reserve(order_id=101, work_center_id=1, day=day, hours=3)
+    second = calendar.reserve(order_id=102, work_center_id=1, day=day, hours=4)
+
+    assert first.start_datetime.isoformat(sep=" ") == "2026-07-10 14:00:00"
+    assert first.end_datetime.isoformat(sep=" ") == "2026-07-10 17:00:00"
+    assert second.start_datetime.isoformat(sep=" ") == "2026-07-10 10:00:00"
+    assert second.end_datetime.isoformat(sep=" ") == "2026-07-10 14:00:00"
+    assert second.end_datetime <= first.start_datetime
+    assert calendar.free_hours(1, day) == 1

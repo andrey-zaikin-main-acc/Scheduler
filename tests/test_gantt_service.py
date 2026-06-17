@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.constants import ORDER_STATUS_NEW, ORDER_STATUS_PLANNED
 from app.db.database import Base
-from app.db.models import Order, PlannedOperation, Route, RouteOperation, WorkCenter
+from app.db.models import Order, PlannedOperation, PlannedOperationDay, Route, RouteOperation, WorkCenter
 from app.services.gantt_service import GanttService
 
 
@@ -45,8 +45,7 @@ def create_planned_operation(session: Session) -> None:
     )
     session.add(order)
     session.flush()
-    session.add(
-        PlannedOperation(
+    planned_operation = PlannedOperation(
             order_id=order.id,
             route_operation_id=route_operation.id,
             work_center_id=work_center.id,
@@ -56,6 +55,17 @@ def create_planned_operation(session: Session) -> None:
             required_hours=8,
             planned_hours=8,
             status=ORDER_STATUS_PLANNED,
+        )
+    session.add(planned_operation)
+    session.flush()
+    session.add(
+        PlannedOperationDay(
+            planned_operation_id=planned_operation.id,
+            work_center_id=work_center.id,
+            date=date(2026, 7, 10),
+            hours=8,
+            start_datetime=datetime(2026, 7, 10, 9),
+            end_datetime=datetime(2026, 7, 10, 17),
         )
     )
     session.commit()
@@ -70,8 +80,10 @@ def test_gantt_by_orders_uses_order_lanes(session: Session) -> None:
         {
             "row": "G-001",
             "task": "1. Печать",
-            "start": date(2026, 7, 10),
-            "finish": date(2026, 7, 10),
+            "start": datetime(2026, 7, 10, 9),
+            "finish": datetime(2026, 7, 10, 17),
+            "start_datetime": datetime(2026, 7, 10, 9),
+            "end_datetime": datetime(2026, 7, 10, 17),
             "order": "G-001",
             "work_center": "Печать",
             "hours": 8,

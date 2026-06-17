@@ -69,6 +69,8 @@ def map_scheduled_operation_days_to_orm(
             work_center_id=day.work_center_id,
             date=day.date,
             hours=day.hours,
+            start_datetime=day.start_datetime,
+            end_datetime=day.end_datetime,
         )
         for day in scheduled_operation.days
     ]

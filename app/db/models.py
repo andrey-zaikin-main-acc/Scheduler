@@ -147,6 +147,8 @@ class PlannedOperationDay(Base):
     work_center_id: Mapped[int] = mapped_column(ForeignKey("work_centers.id"), nullable=False, index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     hours: Mapped[float] = mapped_column(Float, nullable=False)
+    start_datetime: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    end_datetime: Mapped[Optional[datetime]] = mapped_column(DateTime)
     quantity_part: Mapped[Optional[float]] = mapped_column(Float)
 
     planned_operation: Mapped[PlannedOperation] = relationship(back_populates="days")
@@ -154,6 +156,7 @@ class PlannedOperationDay(Base):
 
     __table_args__ = (
         CheckConstraint("hours > 0", name="ck_planned_operation_days_hours_positive"),
+        CheckConstraint("start_datetime < end_datetime", name="ck_planned_operation_days_datetime_order"),
         CheckConstraint("quantity_part IS NULL OR quantity_part >= 0", name="ck_planned_operation_days_quantity_non_negative"),
     )
 
