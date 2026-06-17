@@ -1,6 +1,7 @@
 """Order preparation and sorting rules for planning."""
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from app.constants import PLANNABLE_ORDER_STATUSES
 from app.planning.entities import OperationRequirement, PlanningOrder, PlanningRouteOperation
@@ -14,6 +15,7 @@ class PreparedOrder:
     order: PlanningOrder
     requirements: tuple[OperationRequirement, ...]
     total_required_hours: float
+    ideal_start_datetime: datetime | None = None
 
 
 def prepare_order(
@@ -29,11 +31,12 @@ def prepare_order(
 
 
 def sort_prepared_orders(prepared_orders: list[PreparedOrder] | tuple[PreparedOrder, ...]) -> tuple[PreparedOrder, ...]:
-    """Sort orders by shipment date, total labor descending, then order ID."""
+    """Sort orders by ideal start, shipment date, total labor descending, then order ID."""
     return tuple(
         sorted(
             prepared_orders,
             key=lambda prepared_order: (
+                prepared_order.ideal_start_datetime or datetime.max,
                 prepared_order.order.shipment_date,
                 -prepared_order.total_required_hours,
                 prepared_order.order.id,

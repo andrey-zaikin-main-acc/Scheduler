@@ -14,6 +14,7 @@ def schedule_operation_backward(
     work_center_id: int,
     sequence_number: int,
     required_hours: float,
+    quantity_part: float | None = None,
     latest_allowed_date: date,
     earliest_allowed_date: date,
     capacity_calendar: CapacityCalendar,
@@ -61,10 +62,20 @@ def schedule_operation_backward(
             reason="Недостаточно свободной мощности в допустимом окне размещения.",
         )
 
-    placements = [
-        capacity_calendar.reserve(order_id=order_id, work_center_id=work_center_id, day=day, hours=hours)
-        for day, hours in planned_days
-    ]
+    placements = []
+    for day, hours in planned_days:
+        day_quantity = None
+        if quantity_part is not None:
+            day_quantity = quantity_part * hours / required_hours
+        placements.append(
+            capacity_calendar.reserve(
+                order_id=order_id,
+                work_center_id=work_center_id,
+                day=day,
+                hours=hours,
+                quantity_part=day_quantity,
+            )
+        )
     ordered_placements = tuple(sorted(placements, key=lambda placement: placement.date))
     return ScheduledOperation(
         order_id=order_id,

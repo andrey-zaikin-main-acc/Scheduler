@@ -71,6 +71,7 @@ def map_scheduled_operation_days_to_orm(
             hours=day.hours,
             start_datetime=day.start_datetime,
             end_datetime=day.end_datetime,
+            quantity_part=day.quantity_part,
         )
         for day in scheduled_operation.days
     ]

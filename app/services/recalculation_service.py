@@ -1,6 +1,6 @@
 """Application service that recalculates and persists the production plan."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 from sqlalchemy.orm import Session
@@ -68,6 +68,10 @@ class RecalculationService:
         planning_engine = PlanningEngine(capacity_calendar, planning_start_date=self.planning_start_date)
 
         prepared_orders, invalid_results = self._prepare_orders()
+        prepared_orders = [
+            replace(prepared_order, ideal_start_datetime=planning_engine.calculate_ideal_start_datetime(prepared_order))
+            for prepared_order in prepared_orders
+        ]
         sorted_orders = sort_prepared_orders(prepared_orders)
 
         planned_order_count = 0
