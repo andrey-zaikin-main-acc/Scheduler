@@ -46,6 +46,27 @@ DRAFT_ORDER_SESSION_KEY = "orders_page_show_draft_row"
 SELECTED_ORDER_SESSION_KEY = "orders_page_selected_order_id"
 ORDER_EDITOR_KEY = "orders_page_editor"
 
+ORDER_EDITOR_COLUMNS = [
+    "Выбран",
+    "ID",
+    "Номер",
+    "Клиент",
+    "Продукция",
+    "Тираж",
+    "Срок отгрузки",
+    "Маршрут",
+    "Статус",
+    "Дата запуска",
+    "Конфликт",
+]
+
+DRAFT_ROW_SESSION_KEY = "orders_page_has_draft_row"
+SELECTED_ORDER_SESSION_KEY = "orders_page_selected_order_id"
+
+
+def render_orders_page() -> None:
+    """Render an editable orders registry."""
+
 
 def render_orders_page() -> None:
     """Render the orders registry with inline editing controls."""

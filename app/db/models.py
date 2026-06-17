@@ -1,6 +1,6 @@
 """SQLAlchemy models for the production planner MVP."""
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Optional
 
 from sqlalchemy import CheckConstraint, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
@@ -11,7 +11,7 @@ from app.db.database import Base
 
 def utc_now() -> datetime:
     """Return a timezone-naive UTC timestamp for SQLite storage."""
-    return datetime.utcnow()
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class Order(Base):
