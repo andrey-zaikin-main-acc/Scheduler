@@ -6,7 +6,13 @@ from datetime import date
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Order, PlanChange, PlannedOperation, PlannedOperationDay, PlanningConflict
+from app.db.models import (
+    Order,
+    PlanChange,
+    PlannedOperation,
+    PlannedOperationDay,
+    PlanningConflict,
+)
 
 
 class OrdersRepository:
@@ -17,7 +23,9 @@ class OrdersRepository:
 
     def list_orders(self) -> Sequence[Order]:
         """Return orders ordered by shipment date and ID."""
-        return self.session.scalars(select(Order).order_by(Order.shipment_date, Order.id)).all()
+        return self.session.scalars(
+            select(Order).order_by(Order.shipment_date, Order.id)
+        ).all()
 
     def get_order(self, order_id: int) -> Order | None:
         """Return an order by internal ID."""
@@ -25,7 +33,9 @@ class OrdersRepository:
 
     def get_by_number(self, order_number: str) -> Order | None:
         """Return an order by business number."""
-        return self.session.scalar(select(Order).where(Order.order_number == order_number))
+        return self.session.scalar(
+            select(Order).where(Order.order_number == order_number)
+        )
 
     def create_order(
         self,
@@ -86,3 +96,27 @@ class OrdersRepository:
         order.status = status
         self.session.flush()
         return order
+
+    def delete_order(self, order_id: int) -> bool:
+        """Physically delete an order and all saved planning data tied to it."""
+        order = self.get_order(order_id)
+        if order is None:
+            return False
+        planned_operation_ids = select(PlannedOperation.id).where(
+            PlannedOperation.order_id == order_id
+        )
+        self.session.execute(
+            delete(PlannedOperationDay).where(
+                PlannedOperationDay.planned_operation_id.in_(planned_operation_ids)
+            )
+        )
+        self.session.execute(delete(PlanChange).where(PlanChange.order_id == order_id))
+        self.session.execute(
+            delete(PlanningConflict).where(PlanningConflict.order_id == order_id)
+        )
+        self.session.execute(
+            delete(PlannedOperation).where(PlannedOperation.order_id == order_id)
+        )
+        self.session.delete(order)
+        self.session.flush()
+        return True

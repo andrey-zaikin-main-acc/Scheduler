@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.constants import ORDER_STATUS_CONFLICT, ORDER_STATUS_PLANNED, PLANNABLE_ORDER_STATUSES
 from app.db.models import Order, PlanChange, PlannedOperation, RecalculationRun, utc_now
 from app.planning.capacity_calendar import CapacityCalendar
-from app.planning.entities import PlannedOrderResult, PlanningConflict, PlanningRouteOperation
+from app.planning.entities import PlannedOrderResult, PlanningConflict
 from app.planning.order_preparation import PreparedOrder, prepare_order, sort_prepared_orders
 from app.planning.planner import PlanningEngine
 from app.repositories.conflicts_repository import ConflictsRepository

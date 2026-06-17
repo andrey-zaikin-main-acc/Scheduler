@@ -3,7 +3,7 @@
 from datetime import date, timedelta
 
 from app.planning.capacity_calendar import CapacityCalendar
-from app.planning.entities import PlanningConflict, ScheduledOperation, ScheduledOperationDay
+from app.planning.entities import PlanningConflict, ScheduledOperation
 
 
 def schedule_operation_backward(
