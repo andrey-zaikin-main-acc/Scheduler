@@ -1,7 +1,7 @@
 """Pure planning data structures used by the MVP planning engine."""
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 
 
 @dataclass(frozen=True)
@@ -50,6 +50,8 @@ class ScheduledOperationDay:
     work_center_id: int
     date: date
     hours: float
+    start_datetime: datetime
+    end_datetime: datetime
 
 
 @dataclass(frozen=True)
