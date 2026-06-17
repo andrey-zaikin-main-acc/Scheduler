@@ -13,11 +13,11 @@ def render_bootstrap_controls() -> None:
         if st.button("Создать таблицы"):
             initialize_database()
             st.success("Таблицы SQLite созданы или уже существовали.")
-        if st.button("Загрузить demo-данные"):
+        if st.button("Загрузить актуальные данные"):
             initialize_database()
             with SessionLocal() as session:
                 load_demo_data(session)
-            st.success("Demo-данные загружены.")
+            st.success("Актуальные seed-данные загружены.")
 
     with st.sidebar.expander("Планирование", expanded=True):
         if st.button("Пересчитать план"):
