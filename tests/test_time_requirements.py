@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -49,23 +49,32 @@ def test_transfer_batch_calculations() -> None:
     ) == 5
 
 
-def test_sort_prepared_orders_by_due_date_labor_and_id() -> None:
+def test_sort_prepared_orders_by_ideal_start_due_date_labor_and_id() -> None:
     early_small = PreparedOrder(
         order=PlanningOrder(id=2, quantity=1000, shipment_date=date(2026, 7, 9), status=ORDER_STATUS_NEW),
         requirements=(),
         total_required_hours=10,
+        ideal_start_datetime=datetime(2026, 7, 7, 9),
     )
     later_large = PreparedOrder(
         order=PlanningOrder(id=1, quantity=1000, shipment_date=date(2026, 7, 10), status=ORDER_STATUS_NEW),
         requirements=(),
         total_required_hours=100,
+        ideal_start_datetime=datetime(2026, 7, 8, 9),
     )
     same_due_larger = PreparedOrder(
         order=PlanningOrder(id=3, quantity=1000, shipment_date=date(2026, 7, 9), status=ORDER_STATUS_NEW),
         requirements=(),
         total_required_hours=20,
+        ideal_start_datetime=datetime(2026, 7, 7, 9),
+    )
+    earlier_ideal_later_due = PreparedOrder(
+        order=PlanningOrder(id=4, quantity=1000, shipment_date=date(2026, 7, 10), status=ORDER_STATUS_NEW),
+        requirements=(),
+        total_required_hours=5,
+        ideal_start_datetime=datetime(2026, 7, 6, 9),
     )
 
-    sorted_orders = sort_prepared_orders([later_large, early_small, same_due_larger])
+    sorted_orders = sort_prepared_orders([later_large, early_small, same_due_larger, earlier_ideal_later_due])
 
-    assert [prepared.order.id for prepared in sorted_orders] == [3, 2, 1]
+    assert [prepared.order.id for prepared in sorted_orders] == [4, 3, 2, 1]

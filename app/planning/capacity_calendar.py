@@ -47,7 +47,15 @@ class CapacityCalendar:
         """Return free hours for a work center on a date."""
         return max(0.0, self.available_hours(work_center_id) - self.occupied_hours(work_center_id, day))
 
-    def reserve(self, *, order_id: int, work_center_id: int, day: date, hours: float) -> ScheduledOperationDay:
+    def reserve(
+        self,
+        *,
+        order_id: int,
+        work_center_id: int,
+        day: date,
+        hours: float,
+        quantity_part: float | None = None,
+    ) -> ScheduledOperationDay:
         """Reserve the latest free non-overlapping interval on one work center date."""
         if hours <= 0:
             raise ValueError("Reserved hours must be greater than 0.")
@@ -74,6 +82,7 @@ class CapacityCalendar:
             hours=hours,
             start_datetime=start_datetime,
             end_datetime=end_datetime,
+            quantity_part=quantity_part,
         )
 
     def total_free_hours(self, *, work_center_id: int, start_date: date, end_date: date) -> float:

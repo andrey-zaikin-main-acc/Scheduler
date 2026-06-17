@@ -52,6 +52,7 @@ class ScheduledOperationDay:
     hours: float
     start_datetime: datetime
     end_datetime: datetime
+    quantity_part: float | None = None
 
 
 @dataclass(frozen=True)
