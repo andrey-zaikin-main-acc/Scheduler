@@ -55,7 +55,18 @@ class PlanningEngine:
         earliest_start = datetime.combine(
             self._earliest_allowed_date(order.shipment_date), datetime.min.time()
         )
-        cursor = latest_finish
+        try:
+            flow_duration_hours = self._calculate_relative_flow_duration_hours(
+                prepared_order
+            )
+        except ValueError as exc:
+            return self._invalid_order_result(order, str(exc))
+
+        # First build the physical route flow in relative time, then attach that
+        # flow to the shipment deadline.  Calendar placement may still push
+        # batches forward because of work-center hours or reservations; if so,
+        # we retry with an earlier automatically calculated order start.
+        cursor = latest_finish - timedelta(hours=flow_duration_hours)
         best_result: PlannedOrderResult | None = None
         last_conflict: PlanningConflict | None = None
 
@@ -186,6 +197,98 @@ class PlanningEngine:
             calculated_start_date=calculated_start_date,
             operations=tuple(placed_operations),
         )
+
+    def _calculate_relative_flow_duration_hours(
+        self, prepared_order: PreparedOrder
+    ) -> float:
+        """Return the route flow duration before attaching calendar dates.
+
+        This models the physical movement of quantity through operations and
+        buffers on an abstract ``t = 0`` timeline.  A buffer only accumulates
+        quantities with ready times; batches are created only when an operation
+        takes quantity from its input buffer.  Each operation processes one
+        uninterrupted batch at a time.
+        """
+        order_quantity = prepared_order.order.quantity
+        incoming_ready: list[tuple[float, float]] = [(order_quantity, 0.0)]
+        route_operations = [
+            requirement.route_operation for requirement in prepared_order.requirements
+        ]
+
+        for index, route_operation in enumerate(route_operations):
+            min_batch_quantity = self._operation_min_batch_quantity(
+                route_operations, index, order_quantity
+            )
+            operation_available_at = 0.0
+            next_incoming_ready: list[tuple[float, float]] = []
+
+            for batch_quantity, input_ready_at in self._build_relative_batches(
+                incoming_ready, min_batch_quantity
+            ):
+                batch_start = max(input_ready_at, operation_available_at)
+                batch_hours = (
+                    batch_quantity * route_operation.labor_hours_per_1000 / 1000
+                )
+                batch_finish = batch_start + batch_hours
+                operation_available_at = batch_finish
+                next_incoming_ready.append((batch_quantity, batch_finish))
+
+            incoming_ready = next_incoming_ready
+
+        return max(ready_at for _, ready_at in incoming_ready)
+
+    def _operation_min_batch_quantity(
+        self,
+        route_operations: list[PlanningRouteOperation],
+        index: int,
+        order_quantity: float,
+    ) -> float:
+        """Return the minimum batch quantity used by an operation.
+
+        The current schema still names the field
+        ``min_transfer_quantity_to_next``.  The planning algorithm treats that
+        stored value as the operation's minimum launch batch; when it is absent
+        the whole remaining order quantity is a single batch.
+        """
+        min_batch_quantity = route_operations[index].min_transfer_quantity_to_next
+        if min_batch_quantity is None:
+            min_batch_quantity = order_quantity
+        if min_batch_quantity <= 0:
+            raise ValueError(
+                "Minimum transfer quantity must be greater than 0 when provided."
+            )
+        return min_batch_quantity
+
+    def _build_relative_batches(
+        self,
+        incoming_ready: list[tuple[float, float]],
+        min_batch_quantity: float,
+    ) -> list[tuple[float, float]]:
+        """Create operation batches from quantity-only input-buffer events."""
+        batches: list[tuple[float, float]] = []
+        buffered_quantity = 0.0
+        buffered_ready_at = 0.0
+        remaining_quantity = sum(quantity for quantity, _ in incoming_ready)
+
+        for quantity, ready_at in sorted(incoming_ready, key=lambda item: item[1]):
+            unallocated_quantity = quantity
+            while unallocated_quantity > 1e-9:
+                taken_quantity = min(
+                    unallocated_quantity, min_batch_quantity - buffered_quantity
+                )
+                buffered_quantity += taken_quantity
+                unallocated_quantity -= taken_quantity
+                remaining_quantity -= taken_quantity
+                buffered_ready_at = max(buffered_ready_at, ready_at)
+
+                is_full_batch = buffered_quantity >= min_batch_quantity - 1e-9
+                is_final_remainder = remaining_quantity <= 1e-9
+                if is_full_batch or is_final_remainder:
+                    batches.append((buffered_quantity, buffered_ready_at))
+                    buffered_quantity = 0.0
+                    buffered_ready_at = 0.0
+
+        return batches
 
     def _operation_output_batches(
         self,
