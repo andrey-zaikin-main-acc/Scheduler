@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db.models import PlannedOperation, PlannedOperationDay
 
+_CONTIGUOUS_TOLERANCE = timedelta(seconds=1)
+
 
 @dataclass(frozen=True)
 class GanttRow:
@@ -21,6 +23,9 @@ class GanttRow:
     work_center: str
     hours: float
     sequence_number: int
+    order_id: int
+    work_center_id: int
+    route_operation_id: int | None
 
     def to_dict(self) -> dict[str, object]:
         """Return a Plotly/Streamlit friendly dict."""
@@ -50,18 +55,13 @@ class GanttService:
         for day in self._load_planned_operation_days():
             operation = day.planned_operation
             rows.append(
-                GanttRow(
+                self._build_row(
+                    day=day,
                     row=operation.order.order_number if operation.order else f"Заказ {operation.order_id}",
                     task=_operation_task(operation),
-                    start=_day_start(day),
-                    finish=_day_finish(day),
-                    order=operation.order.order_number if operation.order else str(operation.order_id),
-                    work_center=day.work_center.name if day.work_center else str(day.work_center_id),
-                    hours=day.hours,
-                    sequence_number=operation.sequence_number,
                 )
             )
-        return [row.to_dict() for row in rows]
+        return [row.to_dict() for row in self._merge_contiguous_rows(rows)]
 
     def get_gantt_by_work_centers(self) -> list[dict[str, object]]:
         """Return Gantt rows where each lane is a work center."""
@@ -69,18 +69,52 @@ class GanttService:
         for day in self._load_planned_operation_days():
             operation = day.planned_operation
             rows.append(
-                GanttRow(
+                self._build_row(
+                    day=day,
                     row=day.work_center.name if day.work_center else f"Участок {day.work_center_id}",
                     task=operation.order.order_number if operation.order else f"Заказ {operation.order_id}",
-                    start=_day_start(day),
-                    finish=_day_finish(day),
-                    order=operation.order.order_number if operation.order else str(operation.order_id),
-                    work_center=day.work_center.name if day.work_center else str(day.work_center_id),
-                    hours=day.hours,
-                    sequence_number=operation.sequence_number,
                 )
             )
-        return [row.to_dict() for row in rows]
+        return [row.to_dict() for row in self._merge_contiguous_rows(rows)]
+
+    def _build_row(self, *, day: PlannedOperationDay, row: str, task: str) -> GanttRow:
+        operation = day.planned_operation
+        return GanttRow(
+            row=row,
+            task=task,
+            start=_day_start(day),
+            finish=_day_finish(day),
+            order=operation.order.order_number if operation.order else str(operation.order_id),
+            work_center=day.work_center.name if day.work_center else str(day.work_center_id),
+            hours=day.hours,
+            sequence_number=operation.sequence_number,
+            order_id=operation.order_id,
+            work_center_id=day.work_center_id,
+            route_operation_id=operation.route_operation_id,
+        )
+
+    def _merge_contiguous_rows(self, rows: list[GanttRow]) -> list[GanttRow]:
+        """Merge adjacent pieces of the same operation with no real time gap."""
+        merged: list[GanttRow] = []
+        for row in sorted(rows, key=_merge_sort_key):
+            previous = merged[-1] if merged else None
+            if previous and _can_merge(previous, row):
+                merged[-1] = GanttRow(
+                    row=previous.row,
+                    task=previous.task,
+                    start=min(previous.start, row.start),
+                    finish=max(previous.finish, row.finish),
+                    order=previous.order,
+                    work_center=previous.work_center,
+                    hours=previous.hours + row.hours,
+                    sequence_number=previous.sequence_number,
+                    order_id=previous.order_id,
+                    work_center_id=previous.work_center_id,
+                    route_operation_id=previous.route_operation_id,
+                )
+            else:
+                merged.append(row)
+        return sorted(merged, key=lambda row: (row.start, row.order_id, row.sequence_number, row.work_center_id))
 
     def _load_planned_operation_days(self) -> list[PlannedOperationDay]:
         """Load detailed planned placements with relations needed for Gantt labels."""
@@ -114,3 +148,21 @@ def _day_start(day: PlannedOperationDay) -> datetime:
 
 def _day_finish(day: PlannedOperationDay) -> datetime:
     return day.end_datetime or _day_start(day) + timedelta(hours=day.hours)
+
+
+def _merge_sort_key(row: GanttRow) -> tuple[int, int, int, int, datetime, datetime]:
+    route_operation_id = row.route_operation_id or 0
+    return (row.order_id, row.work_center_id, route_operation_id, row.sequence_number, row.start, row.finish)
+
+
+def _can_merge(previous: GanttRow, current: GanttRow) -> bool:
+    same_operation = (
+        previous.order_id == current.order_id
+        and previous.work_center_id == current.work_center_id
+        and previous.sequence_number == current.sequence_number
+        and previous.route_operation_id == current.route_operation_id
+    )
+    if not same_operation:
+        return False
+    gap = current.start - previous.finish
+    return timedelta(0) <= gap <= _CONTIGUOUS_TOLERANCE
