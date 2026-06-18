@@ -42,5 +42,13 @@ def prepare_order(
 def sort_prepared_orders(
     prepared_orders: list[PreparedOrder] | tuple[PreparedOrder, ...],
 ) -> tuple[PreparedOrder, ...]:
-    """Keep the base repository processing order without extra planning priorities."""
-    return tuple(prepared_orders)
+    """Sort orders by shipment deadline, then by order id for deterministic planning."""
+    return tuple(
+        sorted(
+            prepared_orders,
+            key=lambda prepared_order: (
+                prepared_order.order.shipment_date,
+                prepared_order.order.id,
+            ),
+        )
+    )

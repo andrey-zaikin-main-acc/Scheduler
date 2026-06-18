@@ -54,7 +54,7 @@ def test_transfer_batch_calculations() -> None:
     )
 
 
-def test_sort_prepared_orders_keeps_base_processing_order_without_extra_priorities() -> (
+def test_sort_prepared_orders_uses_shipment_deadline_then_order_id() -> (
     None
 ):
     first = PreparedOrder(
@@ -84,4 +84,4 @@ def test_sort_prepared_orders_keeps_base_processing_order_without_extra_prioriti
 
     sorted_orders = sort_prepared_orders([first, second, third])
 
-    assert [prepared.order.id for prepared in sorted_orders] == [2, 1, 3]
+    assert [prepared.order.id for prepared in sorted_orders] == [3, 2, 1]
