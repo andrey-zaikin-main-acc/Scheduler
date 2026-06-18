@@ -31,7 +31,8 @@ def schedule_operation_backward(
         _, latest_allowed_datetime = capacity_calendar.workday_bounds(
             work_center_id, latest_allowed_date
         )
-    latest_allowed_date = latest_allowed_datetime.date()
+    else:
+        latest_allowed_date = latest_allowed_datetime.date()
     if earliest_allowed_date > latest_allowed_date:
         return _build_conflict(
             order_id=order_id,
@@ -101,6 +102,7 @@ def schedule_operation_backward(
     ordered_placements = tuple(
         sorted(placements, key=lambda placement: placement.start_datetime)
     )
+    placement_dates = [placement.date for placement in ordered_placements]
     return ScheduledOperation(
         order_id=order_id,
         route_operation_id=route_operation_id,
@@ -108,8 +110,8 @@ def schedule_operation_backward(
         sequence_number=sequence_number,
         required_hours=required_hours,
         planned_hours=sum(placement.hours for placement in ordered_placements),
-        planned_start_date=ordered_placements[0].date,
-        planned_end_date=ordered_placements[-1].date,
+        planned_start_date=min(placement_dates),
+        planned_end_date=max(placement_dates),
         days=ordered_placements,
     )
 
