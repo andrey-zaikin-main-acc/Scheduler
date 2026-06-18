@@ -100,6 +100,72 @@ class CapacityCalendar:
             quantity_part=quantity_part,
         )
 
+    def find_earliest_contiguous_start(
+        self, work_center_id: int, not_before: datetime, hours: float
+    ) -> datetime:
+        """Return earliest start where an uninterrupted order operation can fit."""
+        candidate = self._normalize_to_work_time(work_center_id, not_before)
+        while True:
+            if self._can_reserve_contiguous(work_center_id, candidate, hours):
+                return candidate
+            candidate = self._next_reservation_end_or_next_day(work_center_id, candidate)
+
+    def reserve_contiguous_forward(
+        self,
+        *,
+        order_id: int,
+        work_center_id: int,
+        start_datetime: datetime,
+        hours: float,
+        quantity_part: float | None = None,
+    ) -> tuple[ScheduledOperationDay, ...]:
+        """Reserve a contiguous operation from a start datetime forward."""
+        if hours <= 0:
+            raise ValueError("Reserved hours must be greater than 0.")
+        if not self._can_reserve_contiguous(work_center_id, start_datetime, hours):
+            raise ValueError("Reserved hours exceed contiguous free capacity.")
+
+        remaining = hours
+        cursor = self._normalize_to_work_time(work_center_id, start_datetime)
+        placements: list[ScheduledOperationDay] = []
+        while remaining > 1e-9:
+            work_start, work_end = self.workday_bounds(work_center_id, cursor.date())
+            cursor = max(cursor, work_start)
+            used_hours = min(remaining, (work_end - cursor).total_seconds() / 3600)
+            end_datetime = cursor + timedelta(hours=used_hours)
+            key = (work_center_id, cursor.date())
+            self._occupied_hours[key] += used_hours
+            reservation = CapacityReservation(
+                order_id=order_id,
+                work_center_id=work_center_id,
+                date=cursor.date(),
+                hours=used_hours,
+                start_datetime=cursor,
+                end_datetime=end_datetime,
+            )
+            self._reservations[key].append(reservation)
+            self._reservations[key].sort(key=lambda item: item.start_datetime)
+            placements.append(
+                ScheduledOperationDay(
+                    work_center_id=work_center_id,
+                    date=cursor.date(),
+                    hours=used_hours,
+                    start_datetime=cursor,
+                    end_datetime=end_datetime,
+                    quantity_part=(
+                        None
+                        if quantity_part is None
+                        else quantity_part * used_hours / hours
+                    ),
+                )
+            )
+            remaining -= used_hours
+            cursor = self._normalize_to_work_time(
+                work_center_id,
+                datetime.combine(cursor.date() + timedelta(days=1), time.min),
+            )
+        return tuple(placements)
+
     def free_hours_before(
         self, work_center_id: int, day: date, latest_end_datetime: datetime
     ) -> float:
@@ -196,6 +262,67 @@ class CapacityCalendar:
         if cursor_end - work_start >= duration:
             return cursor_end - duration, cursor_end
         return None
+
+    def _normalize_to_work_time(
+        self, work_center_id: int, value: datetime
+    ) -> datetime:
+        work_start, work_end = self.workday_bounds(work_center_id, value.date())
+        if value < work_start:
+            return work_start
+        if value >= work_end:
+            next_day = value.date() + timedelta(days=1)
+            return self.workday_bounds(work_center_id, next_day)[0]
+        return value
+
+    def _can_reserve_contiguous(
+        self, work_center_id: int, start_datetime: datetime, hours: float
+    ) -> bool:
+        remaining = hours
+        cursor = self._normalize_to_work_time(work_center_id, start_datetime)
+        while remaining > 1e-9:
+            work_start, work_end = self.workday_bounds(work_center_id, cursor.date())
+            cursor = max(cursor, work_start)
+            reservations = sorted(
+                self._reservations.get((work_center_id, cursor.date()), []),
+                key=lambda r: r.start_datetime,
+            )
+            next_busy_start = work_end
+            for reservation in reservations:
+                if reservation.start_datetime < cursor < reservation.end_datetime:
+                    return False
+                if reservation.start_datetime >= cursor:
+                    next_busy_start = min(next_busy_start, reservation.start_datetime)
+                    break
+            free_hours = max(0.0, (next_busy_start - cursor).total_seconds() / 3600)
+            if free_hours <= 1e-9:
+                return False
+            remaining -= free_hours
+            if remaining > 1e-9:
+                if next_busy_start < work_end:
+                    return False
+                cursor = self._normalize_to_work_time(
+                    work_center_id,
+                    datetime.combine(cursor.date() + timedelta(days=1), time.min),
+                )
+        return True
+
+    def _next_reservation_end_or_next_day(
+        self, work_center_id: int, value: datetime
+    ) -> datetime:
+        cursor = self._normalize_to_work_time(work_center_id, value)
+        _, work_end = self.workday_bounds(work_center_id, cursor.date())
+        for reservation in sorted(
+            self._reservations.get((work_center_id, cursor.date()), []),
+            key=lambda r: r.start_datetime,
+        ):
+            if reservation.end_datetime > cursor:
+                return self._normalize_to_work_time(
+                    work_center_id, reservation.end_datetime
+                )
+        return self._normalize_to_work_time(
+            work_center_id,
+            datetime.combine(cursor.date() + timedelta(days=1), time.min),
+        )
 
     def _get_work_center(self, work_center_id: int) -> PlanningWorkCenter:
         try:
