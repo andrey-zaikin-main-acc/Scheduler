@@ -7,7 +7,6 @@ from app.planning.entities import (
     PlanningRouteOperation,
     PlanningWorkCenter,
 )
-from app.planning.order_preparation import prepare_order
 from app.planning.planner import PlanningEngine
 
 
@@ -290,7 +289,7 @@ def test_conflict_does_not_move_shipment_date_when_capacity_is_insufficient() ->
     assert result.calculated_start_date is None
 
 
-def test_ideal_start_datetime_sorting_does_not_break_single_order_compaction() -> None:
+def test_single_order_without_ideal_start_sorting_stays_compact() -> None:
     calendar = CapacityCalendar(
         [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)]
     )
@@ -309,12 +308,7 @@ def test_ideal_start_datetime_sorting_does_not_break_single_order_compaction() -
             labor_hours_per_1000=1,
         ),
     )
-    prepared = prepare_order(order, route_operations)
+    result = engine.plan_order(order, route_operations)
 
-    ideal_start = engine.calculate_ideal_start_datetime(prepared)
-    result = engine.plan_prepared_order(prepared)
-
-    assert ideal_start is not None
-    assert ideal_start.date() == date(2026, 7, 10)
     assert result.is_success
     assert result.calculated_start_date == date(2026, 7, 10)
