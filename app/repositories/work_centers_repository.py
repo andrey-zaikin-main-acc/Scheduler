@@ -1,6 +1,7 @@
 """Repository helpers for production work centers."""
 
 from collections.abc import Sequence
+from datetime import time
 
 from sqlalchemy import delete, exists, select
 from sqlalchemy.orm import Session
@@ -24,12 +25,18 @@ class WorkCentersRepository:
         return self.session.scalars(select(WorkCenter).order_by(WorkCenter.name)).all()
 
     def create_work_center(
-        self, *, name: str, available_hours_per_day: float, is_active: bool = True
+        self,
+        *,
+        name: str,
+        available_hours_per_day: float,
+        workday_start_time: time = time(hour=9),
+        is_active: bool = True,
     ) -> WorkCenter:
         """Create a work center with positive daily capacity."""
         work_center = WorkCenter(
             name=name,
             available_hours_per_day=available_hours_per_day,
+            workday_start_time=workday_start_time,
             is_active=is_active,
         )
         self.session.add(work_center)
@@ -42,6 +49,7 @@ class WorkCentersRepository:
         *,
         name: str,
         available_hours_per_day: float,
+        workday_start_time: time,
         is_active: bool,
     ) -> WorkCenter | None:
         """Update a work center directory entry."""
@@ -50,6 +58,7 @@ class WorkCentersRepository:
             return None
         work_center.name = name
         work_center.available_hours_per_day = available_hours_per_day
+        work_center.workday_start_time = workday_start_time
         work_center.is_active = is_active
         self.session.flush()
         return work_center

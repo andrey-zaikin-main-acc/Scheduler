@@ -7,7 +7,7 @@ from datetime import date, datetime, time, timedelta
 
 from app.planning.entities import PlanningWorkCenter, ScheduledOperationDay
 
-WORKDAY_START = time(hour=9)
+DEFAULT_WORKDAY_START = time(hour=9)
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,10 @@ class CapacityCalendar:
         self, work_center_id: int, day: date
     ) -> tuple[datetime, datetime]:
         """Return start and end datetimes of the work center day."""
-        start = datetime.combine(day, WORKDAY_START)
+        work_center = self._get_work_center(work_center_id)
+        start = datetime.combine(
+            day, work_center.workday_start_time or DEFAULT_WORKDAY_START
+        )
         return start, start + timedelta(hours=self.available_hours(work_center_id))
 
     def occupied_hours(self, work_center_id: int, day: date) -> float:

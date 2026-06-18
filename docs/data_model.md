@@ -36,6 +36,7 @@
 - `id`;
 - `name`;
 - `available_hours_per_day`;
+- `workday_start_time` — время начала рабочего дня участка, по умолчанию 09:00;
 - `is_active`;
 - `created_at`;
 - `updated_at`.

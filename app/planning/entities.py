@@ -1,7 +1,7 @@
 """Pure planning data structures used by the MVP planning engine."""
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,7 @@ class PlanningWorkCenter:
     id: int
     name: str
     available_hours_per_day: float
+    workday_start_time: time = time(hour=9)
 
 
 @dataclass(frozen=True)
