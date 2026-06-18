@@ -1,15 +1,23 @@
 """Application service that recalculates and persists the production plan."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date
 
 from sqlalchemy.orm import Session
 
-from app.constants import ORDER_STATUS_CONFLICT, ORDER_STATUS_PLANNED, PLANNABLE_ORDER_STATUSES
+from app.constants import (
+    ORDER_STATUS_CONFLICT,
+    ORDER_STATUS_PLANNED,
+    PLANNABLE_ORDER_STATUSES,
+)
 from app.db.models import Order, PlanChange, PlannedOperation, RecalculationRun, utc_now
 from app.planning.capacity_calendar import CapacityCalendar
 from app.planning.entities import PlannedOrderResult, PlanningConflict
-from app.planning.order_preparation import PreparedOrder, prepare_order, sort_prepared_orders
+from app.planning.order_preparation import (
+    PreparedOrder,
+    prepare_order,
+    sort_prepared_orders,
+)
 from app.planning.planner import PlanningEngine
 from app.repositories.conflicts_repository import ConflictsRepository
 from app.repositories.orders_repository import OrdersRepository
@@ -40,7 +48,9 @@ class RecalculationSummary:
 class RecalculationService:
     """Coordinates ORM repositories and the pure planning engine."""
 
-    def __init__(self, session: Session, planning_start_date: date | None = None) -> None:
+    def __init__(
+        self, session: Session, planning_start_date: date | None = None
+    ) -> None:
         self.session = session
         self.planning_start_date = planning_start_date
         self.orders_repository = OrdersRepository(session)
@@ -65,13 +75,11 @@ class RecalculationService:
             if work_center.is_active
         ]
         capacity_calendar = CapacityCalendar(work_centers)
-        planning_engine = PlanningEngine(capacity_calendar, planning_start_date=self.planning_start_date)
+        planning_engine = PlanningEngine(
+            capacity_calendar, planning_start_date=self.planning_start_date
+        )
 
         prepared_orders, invalid_results = self._prepare_orders()
-        prepared_orders = [
-            replace(prepared_order, ideal_start_datetime=planning_engine.calculate_ideal_start_datetime(prepared_order))
-            for prepared_order in prepared_orders
-        ]
         sorted_orders = sort_prepared_orders(prepared_orders)
 
         planned_order_count = 0
@@ -128,7 +136,14 @@ class RecalculationService:
                 continue
             planning_order = map_order_to_planning(order)
             route = self.routes_repository.get_route_with_operations(order.route_id)
-            route_operations = tuple(map_route_operation_to_planning(operation) for operation in route.operations) if route else ()
+            route_operations = (
+                tuple(
+                    map_route_operation_to_planning(operation)
+                    for operation in route.operations
+                )
+                if route
+                else ()
+            )
             try:
                 prepared_orders.append(prepare_order(planning_order, route_operations))
             except ValueError as exc:
@@ -150,13 +165,17 @@ class RecalculationService:
                 )
         return prepared_orders, invalid_results
 
-    def _persist_successful_result(self, result: PlannedOrderResult, order: Order) -> None:
+    def _persist_successful_result(
+        self, result: PlannedOrderResult, order: Order
+    ) -> None:
         order.status = ORDER_STATUS_PLANNED
         order.calculated_start_date = result.calculated_start_date
         for scheduled_operation in result.operations:
             planned_operation = map_scheduled_operation_to_orm(scheduled_operation)
             self.plan_repository.add_planned_operation(planned_operation)
-            days = map_scheduled_operation_days_to_orm(scheduled_operation, planned_operation.id)
+            days = map_scheduled_operation_days_to_orm(
+                scheduled_operation, planned_operation.id
+            )
             self.plan_repository.add_planned_operation_days(days)
 
     def _persist_conflict_result(self, result: PlannedOrderResult) -> None:
@@ -192,10 +211,14 @@ class RecalculationService:
                 continue
             if old_dates is None:
                 change_type = "created"
-                description = f"Операция {sequence_number} заказа {order_id} добавлена в план."
+                description = (
+                    f"Операция {sequence_number} заказа {order_id} добавлена в план."
+                )
             elif new_dates is None:
                 change_type = "removed"
-                description = f"Операция {sequence_number} заказа {order_id} удалена из плана."
+                description = (
+                    f"Операция {sequence_number} заказа {order_id} удалена из плана."
+                )
             else:
                 change_type = "rescheduled"
                 description = (

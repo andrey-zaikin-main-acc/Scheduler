@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date
 
 import pytest
 
@@ -34,7 +34,9 @@ def test_calculate_operation_requirements_and_total_hours() -> None:
 
     requirements = calculate_operation_requirements(10_000, operations)
 
-    assert [requirement.route_operation.sequence_number for requirement in requirements] == [1, 2]
+    assert [
+        requirement.route_operation.sequence_number for requirement in requirements
+    ] == [1, 2]
     assert [requirement.required_hours for requirement in requirements] == [40, 30]
     assert calculate_total_required_hours(requirements) == 70
 
@@ -42,39 +44,44 @@ def test_calculate_operation_requirements_and_total_hours() -> None:
 def test_transfer_batch_calculations() -> None:
     assert effective_transfer_quantity(700, 1000) == 700
     assert effective_transfer_quantity(10_000, 1000) == 1000
-    assert calculate_first_transfer_hours(
-        order_quantity=10_000,
-        min_transfer_quantity=1000,
-        labor_hours_per_1000=5,
-    ) == 5
+    assert (
+        calculate_first_transfer_hours(
+            order_quantity=10_000,
+            min_transfer_quantity=1000,
+            labor_hours_per_1000=5,
+        )
+        == 5
+    )
 
 
-def test_sort_prepared_orders_by_ideal_start_due_date_labor_and_id() -> None:
-    early_small = PreparedOrder(
-        order=PlanningOrder(id=2, quantity=1000, shipment_date=date(2026, 7, 9), status=ORDER_STATUS_NEW),
+def test_sort_prepared_orders_keeps_base_processing_order_without_extra_priorities() -> (
+    None
+):
+    first = PreparedOrder(
+        order=PlanningOrder(
+            id=2, quantity=1000, shipment_date=date(2026, 7, 9), status=ORDER_STATUS_NEW
+        ),
         requirements=(),
         total_required_hours=10,
-        ideal_start_datetime=datetime(2026, 7, 7, 9),
     )
-    later_large = PreparedOrder(
-        order=PlanningOrder(id=1, quantity=1000, shipment_date=date(2026, 7, 10), status=ORDER_STATUS_NEW),
+    second = PreparedOrder(
+        order=PlanningOrder(
+            id=1,
+            quantity=1000,
+            shipment_date=date(2026, 7, 10),
+            status=ORDER_STATUS_NEW,
+        ),
         requirements=(),
         total_required_hours=100,
-        ideal_start_datetime=datetime(2026, 7, 8, 9),
     )
-    same_due_larger = PreparedOrder(
-        order=PlanningOrder(id=3, quantity=1000, shipment_date=date(2026, 7, 9), status=ORDER_STATUS_NEW),
+    third = PreparedOrder(
+        order=PlanningOrder(
+            id=3, quantity=1000, shipment_date=date(2026, 7, 8), status=ORDER_STATUS_NEW
+        ),
         requirements=(),
         total_required_hours=20,
-        ideal_start_datetime=datetime(2026, 7, 7, 9),
-    )
-    earlier_ideal_later_due = PreparedOrder(
-        order=PlanningOrder(id=4, quantity=1000, shipment_date=date(2026, 7, 10), status=ORDER_STATUS_NEW),
-        requirements=(),
-        total_required_hours=5,
-        ideal_start_datetime=datetime(2026, 7, 6, 9),
     )
 
-    sorted_orders = sort_prepared_orders([later_large, early_small, same_due_larger, earlier_ideal_later_due])
+    sorted_orders = sort_prepared_orders([first, second, third])
 
-    assert [prepared.order.id for prepared in sorted_orders] == [4, 3, 2, 1]
+    assert [prepared.order.id for prepared in sorted_orders] == [2, 1, 3]

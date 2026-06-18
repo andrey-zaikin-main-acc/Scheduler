@@ -1,5 +1,6 @@
 """Pure MVP planning engine."""
 
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 
 from app.config import MAX_BACKWARD_SEARCH_MONTHS
@@ -11,6 +12,7 @@ from app.planning.entities import (
     PlanningOrder,
     PlanningRouteOperation,
     ScheduledOperation,
+    ScheduledOperationDay,
 )
 from app.planning.order_preparation import PreparedOrder, prepare_order
 from app.planning.time_requirements import calculate_required_hours
@@ -40,194 +42,178 @@ class PlanningEngine:
         try:
             prepared_order = prepare_order(order, route_operations)
         except ValueError as exc:
-            return PlannedOrderResult(
-                order_id=order.id,
-                calculated_start_date=None,
-                conflict=PlanningConflict(
-                    order_id=order.id,
-                    shipment_date=order.shipment_date,
-                    work_center_id=None,
-                    required_hours=0.0,
-                    available_hours=0.0,
-                    deficit_hours=0.0,
-                    blocking_order_ids=(),
-                    reason=str(exc),
-                ),
-            )
+            return self._invalid_order_result(order, str(exc))
         return self.plan_prepared_order(prepared_order)
 
     def plan_prepared_order(self, prepared_order: PreparedOrder) -> PlannedOrderResult:
-        """Plan a prepared order and rollback its reservations if it conflicts."""
+        """Plan a prepared order backwards from its fixed shipment date."""
         snapshot = self.capacity_calendar.snapshot()
         order = prepared_order.order
-        earliest_allowed_date = self._earliest_allowed_date(order.shipment_date)
-        scheduled_operations: list[ScheduledOperation] = []
         requirements = prepared_order.requirements
-
         if not requirements:
             self.capacity_calendar.restore(snapshot)
-            return PlannedOrderResult(
-                order_id=order.id,
-                calculated_start_date=None,
-                conflict=PlanningConflict(
-                    order_id=order.id,
-                    shipment_date=order.shipment_date,
-                    work_center_id=None,
-                    required_hours=0.0,
-                    available_hours=0.0,
-                    deficit_hours=0.0,
-                    blocking_order_ids=(),
-                    reason="Route has no operations.",
-                ),
-            )
+            return self._invalid_order_result(order, "Route has no operations.")
 
-        last_operation = requirements[-1].route_operation
-        _, shipment_deadline = self.capacity_calendar.workday_bounds(
-            last_operation.work_center_id, order.shipment_date
+        earliest_allowed_date = self._earliest_allowed_date(order.shipment_date)
+        latest_deadline = self._shipment_deadline(
+            requirements[-1].route_operation, order.shipment_date
         )
-        previous_operation = (
-            requirements[-2].route_operation if len(requirements) > 1 else None
-        )
-        downstream_demands = [
-            (quantity, shipment_deadline)
-            for quantity in self._split_quantity(
-                order.quantity,
-                (
-                    previous_operation.min_transfer_quantity_to_next
-                    if previous_operation is not None
-                    else None
-                ),
-            )
-        ]
+        scheduled_reversed: list[ScheduledOperation] = []
 
-        for index in range(len(requirements) - 1, -1, -1):
-            requirement = requirements[index]
+        for requirement in reversed(requirements):
             operation = requirement.route_operation
-            operation_batches: list[ScheduledOperation] = []
-
-            for quantity_part, deadline in reversed(downstream_demands):
-                scheduled_or_conflict = schedule_operation_backward(
-                    order_id=order.id,
-                    shipment_date=order.shipment_date,
-                    route_operation_id=operation.id,
-                    work_center_id=operation.work_center_id,
-                    sequence_number=operation.sequence_number,
-                    required_hours=calculate_required_hours(
-                        quantity_part, operation.labor_hours_per_1000
-                    ),
-                    quantity_part=quantity_part,
-                    latest_allowed_datetime=deadline,
-                    earliest_allowed_date=earliest_allowed_date,
-                    capacity_calendar=self.capacity_calendar,
-                )
-                if isinstance(scheduled_or_conflict, PlanningConflict):
-                    self.capacity_calendar.restore(snapshot)
-                    scheduled_or_conflict = PlanningConflict(
-                        order_id=scheduled_or_conflict.order_id,
-                        shipment_date=scheduled_or_conflict.shipment_date,
-                        work_center_id=scheduled_or_conflict.work_center_id,
-                        required_hours=scheduled_or_conflict.required_hours,
-                        available_hours=scheduled_or_conflict.available_hours,
-                        deficit_hours=scheduled_or_conflict.deficit_hours,
-                        blocking_order_ids=scheduled_or_conflict.blocking_order_ids,
-                        reason="Недостаточно мощности для размещения партии или операции в допустимом окне.",
-                    )
-                    return PlannedOrderResult(
-                        order_id=order.id,
-                        calculated_start_date=None,
-                        operations=tuple(
-                            sorted(
-                                scheduled_operations,
-                                key=lambda scheduled: scheduled.sequence_number,
-                            )
-                        ),
-                        conflict=scheduled_or_conflict,
-                    )
-                operation_batches.append(scheduled_or_conflict)
-
-            scheduled_operations.extend(operation_batches)
-            if index > 0:
-                previous_operation = requirements[index - 1].route_operation
-                produced_demands = [
-                    (
-                        batch.days
-                        and sum(day.quantity_part or 0 for day in batch.days),
-                        min(day.start_datetime for day in batch.days),
-                    )
-                    for batch in operation_batches
-                ]
-                produced_demands = [
-                    (quantity, deadline)
-                    for quantity, deadline in produced_demands
-                    if quantity
-                ]
-                if previous_operation.min_transfer_quantity_to_next is None:
-                    downstream_demands = [
-                        (
-                            sum(quantity for quantity, _ in produced_demands),
-                            min(deadline for _, deadline in produced_demands),
-                        )
-                    ]
-                else:
-                    downstream_demands = sorted(
-                        produced_demands, key=lambda item: item[1]
-                    )
-
-        ordered_operations = tuple(
-            sorted(
-                scheduled_operations,
-                key=lambda scheduled: (
-                    scheduled.sequence_number,
-                    scheduled.planned_start_date,
-                ),
+            scheduled_or_conflict = schedule_operation_backward(
+                order_id=order.id,
+                shipment_date=order.shipment_date,
+                route_operation_id=operation.id,
+                work_center_id=operation.work_center_id,
+                sequence_number=operation.sequence_number,
+                required_hours=requirement.required_hours,
+                quantity_part=order.quantity,
+                latest_allowed_datetime=latest_deadline,
+                earliest_allowed_date=earliest_allowed_date,
+                capacity_calendar=self.capacity_calendar,
             )
-        )
+            if isinstance(scheduled_or_conflict, PlanningConflict):
+                self.capacity_calendar.restore(snapshot)
+                return PlannedOrderResult(
+                    order_id=order.id,
+                    calculated_start_date=None,
+                    operations=tuple(
+                        sorted(scheduled_reversed, key=lambda op: op.sequence_number)
+                    ),
+                    conflict=replace(
+                        scheduled_or_conflict,
+                        reason="Недостаточно мощности для размещения партии или операции в допустимом окне без переноса отгрузки.",
+                    ),
+                )
+            scheduled_reversed.append(scheduled_or_conflict)
+            latest_deadline = min(
+                day.start_datetime for day in scheduled_or_conflict.days
+            )
+
+        split_operations: list[ScheduledOperation] = []
+        for operation in sorted(scheduled_reversed, key=lambda op: op.sequence_number):
+            split_operations.extend(
+                self._split_scheduled_operation(prepared_order, operation)
+            )
+        scheduled_operations = tuple(split_operations)
         calculated_start_date = min(
             day.start_datetime
-            for operation in ordered_operations
+            for operation in scheduled_operations
             for day in operation.days
         ).date()
         return PlannedOrderResult(
             order_id=order.id,
             calculated_start_date=calculated_start_date,
-            operations=ordered_operations,
+            operations=scheduled_operations,
         )
 
-    def calculate_ideal_start_datetime(
-        self, prepared_order: PreparedOrder
-    ) -> datetime | None:
-        """Return the unconstrained latest start date used as planning priority."""
-        snapshot = self.capacity_calendar.snapshot()
-        result = self.plan_prepared_order(prepared_order)
-        self.capacity_calendar.restore(snapshot)
-        if not result.is_success or not result.operations:
-            return None
-        return min(
-            day.start_datetime
-            for operation in result.operations
-            for day in operation.days
+    def _shipment_deadline(
+        self, operation: PlanningRouteOperation, shipment_date: date
+    ) -> datetime:
+        _, shipment_deadline = self.capacity_calendar.workday_bounds(
+            operation.work_center_id, shipment_date
         )
+        return shipment_deadline
 
-    def _batch_quantities_by_sequence(
-        self, prepared_order: PreparedOrder
-    ) -> dict[int, list[float]]:
-        requirements = prepared_order.requirements
-        result: dict[int, list[float]] = {}
-        previous_batches: list[float] | None = None
-        for requirement in requirements:
-            operation = requirement.route_operation
-            if operation.min_transfer_quantity_to_next is not None:
-                operation_batches = self._split_quantity(
-                    prepared_order.order.quantity,
-                    operation.min_transfer_quantity_to_next,
+    def _split_scheduled_operation(
+        self, prepared_order: PreparedOrder, scheduled_operation: ScheduledOperation
+    ) -> list[ScheduledOperation]:
+        """Split a placed operation into transfer-batch scheduled operations."""
+        batch_quantities = self._batch_quantities_for_sequence(
+            prepared_order, scheduled_operation.sequence_number
+        )
+        split_day_groups = self._split_days_by_quantities(
+            scheduled_operation.days, batch_quantities, prepared_order.order.quantity
+        )
+        result: list[ScheduledOperation] = []
+        for days in split_day_groups:
+            if not days:
+                continue
+            result.append(
+                replace(
+                    scheduled_operation,
+                    required_hours=sum(day.hours for day in days),
+                    planned_hours=sum(day.hours for day in days),
+                    planned_start_date=min(day.date for day in days),
+                    planned_end_date=max(day.date for day in days),
+                    days=tuple(days),
                 )
-            else:
-                operation_batches = previous_batches or [prepared_order.order.quantity]
-            result[operation.sequence_number] = operation_batches
-            previous_batches = self._split_quantity(
-                prepared_order.order.quantity, operation.min_transfer_quantity_to_next
             )
         return result
+
+    def _batch_quantities_for_sequence(
+        self, prepared_order: PreparedOrder, sequence_number: int
+    ) -> list[float]:
+        requirements = list(prepared_order.requirements)
+        index = next(
+            i
+            for i, req in enumerate(requirements)
+            if req.route_operation.sequence_number == sequence_number
+        )
+        operation = requirements[index].route_operation
+        source_transfer_quantity = operation.min_transfer_quantity_to_next
+        if source_transfer_quantity is None and index > 0:
+            source_transfer_quantity = requirements[
+                index - 1
+            ].route_operation.min_transfer_quantity_to_next
+        return self._split_quantity(
+            prepared_order.order.quantity, source_transfer_quantity
+        )
+
+    def _split_days_by_quantities(
+        self,
+        days: tuple[ScheduledOperationDay, ...],
+        quantities: list[float],
+        total_quantity: float,
+    ) -> list[list[ScheduledOperationDay]]:
+        if not days:
+            return []
+        ordered_days = sorted(days, key=lambda day: day.start_datetime)
+        total_seconds = sum(
+            (day.end_datetime - day.start_datetime).total_seconds()
+            for day in ordered_days
+        )
+        if total_seconds <= 0:
+            return [list(ordered_days)]
+        seconds_per_unit = total_seconds / total_quantity
+        groups: list[list[ScheduledOperationDay]] = []
+        day_index = 0
+        cursor = ordered_days[0].start_datetime
+        current_day = ordered_days[0]
+        for quantity in quantities:
+            remaining_seconds = quantity * seconds_per_unit
+            group: list[ScheduledOperationDay] = []
+            while remaining_seconds > 1e-6:
+                available_seconds = (current_day.end_datetime - cursor).total_seconds()
+                used_seconds = min(remaining_seconds, available_seconds)
+                part_end = cursor + timedelta(seconds=used_seconds)
+                group.append(
+                    replace(
+                        current_day,
+                        date=cursor.date(),
+                        hours=used_seconds / 3600,
+                        start_datetime=cursor,
+                        end_datetime=part_end,
+                        quantity_part=quantity
+                        * used_seconds
+                        / (quantity * seconds_per_unit),
+                    )
+                )
+                remaining_seconds -= used_seconds
+                cursor = part_end
+                if remaining_seconds > 1e-6:
+                    day_index += 1
+                    current_day = ordered_days[day_index]
+                    cursor = current_day.start_datetime
+            delta = quantity - sum(day.quantity_part or 0 for day in group)
+            if abs(delta) > 1e-6 and group:
+                group[-1] = replace(
+                    group[-1], quantity_part=(group[-1].quantity_part or 0) + delta
+                )
+            groups.append(group)
+        return groups
 
     def _split_quantity(
         self, quantity: float, min_transfer_quantity: float | None
@@ -241,6 +227,24 @@ class PlanningEngine:
             batches.append(quantity_part)
             remaining -= quantity_part
         return batches
+
+    def _invalid_order_result(
+        self, order: PlanningOrder, reason: str
+    ) -> PlannedOrderResult:
+        return PlannedOrderResult(
+            order_id=order.id,
+            calculated_start_date=None,
+            conflict=PlanningConflict(
+                order_id=order.id,
+                shipment_date=order.shipment_date,
+                work_center_id=None,
+                required_hours=0.0,
+                available_hours=0.0,
+                deficit_hours=0.0,
+                blocking_order_ids=(),
+                reason=reason,
+            ),
+        )
 
     def _earliest_allowed_date(self, shipment_date: date) -> date:
         technical_limit = shipment_date - timedelta(
