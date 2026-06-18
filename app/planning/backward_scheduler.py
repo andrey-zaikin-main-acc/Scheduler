@@ -1,6 +1,6 @@
 """Backward operation scheduler for the MVP planning engine."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from app.planning.capacity_calendar import CapacityCalendar
 from app.planning.entities import PlanningConflict, ScheduledOperation
@@ -15,13 +15,23 @@ def schedule_operation_backward(
     sequence_number: int,
     required_hours: float,
     quantity_part: float | None = None,
-    latest_allowed_date: date,
+    latest_allowed_date: date | None = None,
+    latest_allowed_datetime: datetime | None = None,
     earliest_allowed_date: date,
     capacity_calendar: CapacityCalendar,
 ) -> ScheduledOperation | PlanningConflict:
-    """Schedule one operation as late as possible before or on the allowed date."""
+    """Schedule one operation as late as possible before the allowed datetime."""
     if required_hours <= 0:
         raise ValueError("Required hours must be greater than 0.")
+    if latest_allowed_datetime is None:
+        if latest_allowed_date is None:
+            raise ValueError(
+                "latest_allowed_date or latest_allowed_datetime is required."
+            )
+        _, latest_allowed_datetime = capacity_calendar.workday_bounds(
+            work_center_id, latest_allowed_date
+        )
+    latest_allowed_date = latest_allowed_datetime.date()
     if earliest_allowed_date > latest_allowed_date:
         return _build_conflict(
             order_id=order_id,
@@ -35,18 +45,29 @@ def schedule_operation_backward(
 
     remaining_hours = required_hours
     current_date = latest_allowed_date
-    planned_days: list[tuple[date, float]] = []
+    planned_days: list[tuple[date, float, datetime]] = []
 
     while remaining_hours > 0 and current_date >= earliest_allowed_date:
-        free_hours = capacity_calendar.free_hours(work_center_id, current_date)
-        if free_hours > 0:
-            planned_hours = min(remaining_hours, free_hours)
-            planned_days.append((current_date, planned_hours))
-            remaining_hours -= planned_hours
+        day_start, day_end = capacity_calendar.workday_bounds(
+            work_center_id, current_date
+        )
+        deadline = (
+            min(day_end, latest_allowed_datetime)
+            if current_date == latest_allowed_date
+            else day_end
+        )
+        if deadline > day_start:
+            free_hours = capacity_calendar.free_hours_before(
+                work_center_id, current_date, deadline
+            )
+            if free_hours > 0:
+                planned_hours = min(remaining_hours, free_hours)
+                planned_days.append((current_date, planned_hours, deadline))
+                remaining_hours -= planned_hours
         current_date -= timedelta(days=1)
 
     if remaining_hours > 0:
-        available_hours = sum(hours for _, hours in planned_days)
+        available_hours = sum(hours for _, hours, _ in planned_days)
         blocking_order_ids = capacity_calendar.blocking_order_ids(
             work_center_id=work_center_id,
             start_date=earliest_allowed_date,
@@ -63,7 +84,7 @@ def schedule_operation_backward(
         )
 
     placements = []
-    for day, hours in planned_days:
+    for day, hours, deadline in planned_days:
         day_quantity = None
         if quantity_part is not None:
             day_quantity = quantity_part * hours / required_hours
@@ -74,9 +95,12 @@ def schedule_operation_backward(
                 day=day,
                 hours=hours,
                 quantity_part=day_quantity,
+                latest_end_datetime=deadline,
             )
         )
-    ordered_placements = tuple(sorted(placements, key=lambda placement: placement.date))
+    ordered_placements = tuple(
+        sorted(placements, key=lambda placement: placement.start_datetime)
+    )
     return ScheduledOperation(
         order_id=order_id,
         route_operation_id=route_operation_id,
