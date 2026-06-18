@@ -261,6 +261,69 @@ def test_previous_operation_finishes_before_exact_dependent_batch_start_datetime
     )
 
 
+def test_middle_operation_waits_for_its_own_minimum_batch_quantity() -> None:
+    calendar = CapacityCalendar(
+        [
+            PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8),
+            PlanningWorkCenter(id=2, name="Высечка", available_hours_per_day=8),
+        ]
+    )
+    engine = PlanningEngine(
+        capacity_calendar=calendar, planning_start_date=date(2026, 7, 1)
+    )
+    order = PlanningOrder(
+        id=205, quantity=2500, shipment_date=date(2026, 7, 10), status=ORDER_STATUS_NEW
+    )
+    route_operations = (
+        PlanningRouteOperation(
+            id=1,
+            sequence_number=1,
+            work_center_id=1,
+            work_center_name="Печать",
+            labor_hours_per_1000=1,
+            min_transfer_quantity_to_next=500,
+        ),
+        PlanningRouteOperation(
+            id=2,
+            sequence_number=2,
+            work_center_id=2,
+            work_center_name="Высечка",
+            labor_hours_per_1000=1,
+            min_transfer_quantity_to_next=1000,
+        ),
+    )
+
+    result = engine.plan_order(order, route_operations)
+
+    assert result.is_success
+    first_operation_batches = sorted(
+        (
+            sum(day.quantity_part or 0 for day in operation.days),
+            max(day.end_datetime for day in operation.days),
+        )
+        for operation in result.operations
+        if operation.sequence_number == 1
+    )
+    second_operation_batches = sorted(
+        (
+            sum(day.quantity_part or 0 for day in operation.days),
+            min(day.start_datetime for day in operation.days),
+        )
+        for operation in result.operations
+        if operation.sequence_number == 2
+    )
+
+    assert [quantity for quantity, _ in first_operation_batches] == [
+        500,
+        500,
+        500,
+        500,
+        500,
+    ]
+    assert [quantity for quantity, _ in second_operation_batches] == [500, 1000, 1000]
+    assert first_operation_batches[1][1] <= second_operation_batches[1][1]
+
+
 def test_conflict_does_not_move_shipment_date_when_capacity_is_insufficient() -> None:
     calendar = CapacityCalendar(
         [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=1)]

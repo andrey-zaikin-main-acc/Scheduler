@@ -61,7 +61,13 @@ class PlanningEngine:
 
         while cursor >= earliest_start:
             snapshot = self.capacity_calendar.snapshot()
-            planned_or_conflict = self._try_place_forward_flow(prepared_order, cursor)
+            try:
+                planned_or_conflict = self._try_place_forward_flow(
+                    prepared_order, cursor
+                )
+            except ValueError as exc:
+                self.capacity_calendar.restore(snapshot)
+                return self._invalid_order_result(order, str(exc))
             if isinstance(planned_or_conflict, PlannedOrderResult):
                 finish = max(
                     day.end_datetime
@@ -125,50 +131,60 @@ class PlanningEngine:
 
         for index, requirement in enumerate(prepared_order.requirements):
             route_operation = requirement.route_operation
-            first_input_ready = min(ready for _, ready, _ in incoming_ready)
-            requested_start = (
-                first_operation_not_before if index == 0 else first_input_ready
+            operation_batches = self._build_operation_input_batches(
+                incoming_ready,
+                route_operation.min_transfer_quantity_to_next,
+                order.quantity,
+                first_operation_not_before if index == 0 else None,
             )
-            start = self.capacity_calendar.find_earliest_contiguous_start(
-                route_operation.work_center_id,
-                requested_start,
-                requirement.required_hours,
-            )
-            scheduled_days = self.capacity_calendar.reserve_contiguous_forward(
-                order_id=order.id,
-                work_center_id=route_operation.work_center_id,
-                start_datetime=start,
-                hours=requirement.required_hours,
-                quantity_part=order.quantity,
-            )
-            scheduled = ScheduledOperation(
-                order_id=order.id,
-                route_operation_id=route_operation.id,
-                work_center_id=route_operation.work_center_id,
-                sequence_number=route_operation.sequence_number,
-                required_hours=requirement.required_hours,
-                planned_hours=sum(day.hours for day in scheduled_days),
-                planned_start_date=min(day.date for day in scheduled_days),
-                planned_end_date=max(day.date for day in scheduled_days),
-                days=tuple(scheduled_days),
-            )
-            placed_operations.append(scheduled)
-            incoming_ready = self._operation_output_batches(
-                scheduled, route_operation.min_transfer_quantity_to_next, order.quantity
-            )
+            previous_batch_finish: datetime | None = None
+            next_incoming_ready: list[tuple[float, datetime, bool]] = []
 
-        split_operations: list[ScheduledOperation] = []
-        for operation in placed_operations:
-            split_operations.extend(
-                self._split_scheduled_operation(prepared_order, operation)
-            )
+            for batch_quantity, input_ready, is_last_batch in operation_batches:
+                batch_hours = (
+                    batch_quantity * route_operation.labor_hours_per_1000 / 1000
+                )
+                requested_start = input_ready
+                if previous_batch_finish is not None:
+                    requested_start = max(requested_start, previous_batch_finish)
+                start = self.capacity_calendar.find_earliest_contiguous_start(
+                    route_operation.work_center_id,
+                    requested_start,
+                    batch_hours,
+                )
+                scheduled_days = self.capacity_calendar.reserve_contiguous_forward(
+                    order_id=order.id,
+                    work_center_id=route_operation.work_center_id,
+                    start_datetime=start,
+                    hours=batch_hours,
+                    quantity_part=batch_quantity,
+                )
+                scheduled = ScheduledOperation(
+                    order_id=order.id,
+                    route_operation_id=route_operation.id,
+                    work_center_id=route_operation.work_center_id,
+                    sequence_number=route_operation.sequence_number,
+                    required_hours=batch_hours,
+                    planned_hours=sum(day.hours for day in scheduled_days),
+                    planned_start_date=min(day.date for day in scheduled_days),
+                    planned_end_date=max(day.date for day in scheduled_days),
+                    days=tuple(scheduled_days),
+                )
+                placed_operations.append(scheduled)
+                previous_batch_finish = max(day.end_datetime for day in scheduled_days)
+                next_incoming_ready.append(
+                    (batch_quantity, previous_batch_finish, is_last_batch)
+                )
+
+            incoming_ready = next_incoming_ready
+
         calculated_start_date = min(
-            day.start_datetime for operation in split_operations for day in operation.days
+            day.start_datetime for operation in placed_operations for day in operation.days
         ).date()
         return PlannedOrderResult(
             order_id=order.id,
             calculated_start_date=calculated_start_date,
-            operations=tuple(split_operations),
+            operations=tuple(placed_operations),
         )
 
     def _operation_output_batches(
@@ -190,6 +206,64 @@ class PlanningEngine:
             elapsed += quantity * seconds_per_unit
             ready = self._datetime_after_processing_seconds(days, elapsed)
             batches.append((quantity, ready, batch_index == len(quantities) - 1))
+        return batches
+
+    def _build_operation_input_batches(
+        self,
+        incoming_ready: list[tuple[float, datetime, bool]],
+        min_batch_quantity: float | None,
+        order_quantity: float,
+        first_operation_not_before: datetime | None = None,
+    ) -> list[tuple[float, datetime, bool]]:
+        """Build physically available input batches for one route operation.
+
+        The batch size is controlled by the current route operation.  Middle
+        operations therefore wait until enough product has been transferred by
+        the previous operation before starting their own batch.  The final
+        batch may be smaller than the minimum batch size.
+        """
+        if min_batch_quantity is None:
+            if first_operation_not_before is None:
+                return sorted(incoming_ready, key=lambda item: item[1])
+            min_batch_quantity = order_quantity
+        if min_batch_quantity <= 0:
+            raise ValueError(
+                "Minimum transfer quantity must be greater than 0 when provided."
+            )
+
+        ordered_inputs = sorted(incoming_ready, key=lambda item: item[1])
+        batches: list[tuple[float, datetime, bool]] = []
+        buffered_quantity = 0.0
+        buffered_ready: datetime | None = first_operation_not_before
+        remaining_order_quantity = sum(quantity for quantity, _, _ in ordered_inputs)
+
+        for quantity, ready_datetime, _ in ordered_inputs:
+            unallocated_quantity = quantity
+            while unallocated_quantity > 1e-9:
+                needed_quantity = min_batch_quantity - buffered_quantity
+                taken_quantity = min(unallocated_quantity, needed_quantity)
+                buffered_quantity += taken_quantity
+                unallocated_quantity -= taken_quantity
+                remaining_order_quantity -= taken_quantity
+                buffered_ready = (
+                    ready_datetime
+                    if buffered_ready is None
+                    else max(buffered_ready, ready_datetime)
+                )
+
+                is_full_batch = buffered_quantity >= min_batch_quantity - 1e-9
+                is_final_remainder = remaining_order_quantity <= 1e-9
+                if is_full_batch or is_final_remainder:
+                    batches.append(
+                        (
+                            buffered_quantity,
+                            buffered_ready or ready_datetime,
+                            is_final_remainder,
+                        )
+                    )
+                    buffered_quantity = 0.0
+                    buffered_ready = first_operation_not_before
+
         return batches
 
     def _datetime_after_processing_seconds(
