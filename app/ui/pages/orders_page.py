@@ -1,6 +1,6 @@
 """Orders registry page."""
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import streamlit as st
@@ -18,6 +18,7 @@ from app.constants import (
 from app.db.database import SessionLocal
 from app.db.models import Order, Route
 from app.repositories.orders_repository import OrdersRepository
+from app.services.route_capacity_service import RouteCapacityService
 from app.ui.components.tables import order_rows
 from app.ui.pages.page_utils import recalculate_after_save
 
@@ -118,6 +119,8 @@ def render_orders_page() -> None:
                     st.session_state[DRAFT_ORDER_SESSION_KEY] = False
                     st.rerun()
                 st.error("Выбранный заказ не найден.")
+
+        _render_route_capacity_check(session, routes)
 
         if not routes:
             st.warning(
@@ -336,3 +339,146 @@ def _parse_quantity(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _render_route_capacity_check(session, routes: list[Route]) -> None:
+    """Render preliminary capacity and shipment slot check without order creation."""
+    st.subheader("Проверка доступного тиража и слотов отгрузки")
+    st.caption(
+        "Предварительный расчёт не создаёт заказ и не изменяет текущий производственный план."
+    )
+
+    today = date.today()
+    default_start = today.replace(day=1)
+    next_month = (default_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    default_end = next_month - timedelta(days=1)
+
+    period_col, route_col, qty_col = st.columns(3)
+    with period_col:
+        period = st.date_input(
+            "Период расчёта",
+            value=(default_start, default_end),
+            format="DD.MM.YYYY",
+            key="orders_route_capacity_period",
+        )
+    with route_col:
+        route_names = [route.name for route in routes]
+        selected_route_name = st.selectbox(
+            "Маршрут",
+            options=route_names,
+            index=0 if route_names else None,
+            key="orders_route_capacity_route",
+            disabled=not route_names,
+        )
+    period_start, period_end = _normalize_period_input(period)
+    route_by_name = {route.name: route for route in routes}
+    selected_route = (
+        route_by_name.get(selected_route_name) if selected_route_name else None
+    )
+
+    capacity = None
+    if (
+        selected_route is not None
+        and period_start is not None
+        and period_end is not None
+    ):
+        capacity = RouteCapacityService(session).calculate_route_capacity(
+            selected_route.id, period_start, period_end
+        )
+        if capacity.warnings:
+            for warning in capacity.warnings:
+                st.warning(warning)
+        metric_col, bottleneck_col = st.columns(2)
+        metric_col.metric(
+            "Максимальный тираж", f"{capacity.max_quantity:,.0f}".replace(",", " ")
+        )
+        bottleneck_col.metric(
+            "Ограничивающий участок", capacity.bottleneck_work_center or "—"
+        )
+        if capacity.max_quantity == 0 and not capacity.warnings:
+            st.info("В выбранном периоде нет доступной мощности для этого маршрута.")
+    elif period_start is None or period_end is None:
+        st.info("Выберите дату начала и дату окончания периода.")
+
+    with qty_col:
+        quantity = st.number_input(
+            "Желаемый тираж",
+            min_value=0.0,
+            step=100.0,
+            value=0.0,
+            key="orders_route_capacity_quantity",
+        )
+
+    if st.button(
+        "Показать свободные слоты отгрузки",
+        disabled=capacity is None or selected_route is None,
+    ):
+        if (
+            capacity is None
+            or selected_route is None
+            or period_start is None
+            or period_end is None
+        ):
+            st.error("Выберите период и маршрут.")
+            return
+        if quantity <= 0:
+            st.error("Тираж должен быть больше 0.")
+            return
+        if quantity > capacity.max_quantity:
+            st.error(
+                "Введённый тираж превышает максимальный доступный тираж для выбранного маршрута и периода."
+            )
+            return
+        slots = RouteCapacityService(session).find_available_shipment_slots(
+            selected_route.id, quantity, period_start, period_end
+        )
+        if not slots:
+            st.info(
+                "Для выбранного маршрута и тиража нет свободных слотов отгрузки в выбранном периоде."
+            )
+        else:
+            st.write("Возможные даты отгрузки:")
+            st.dataframe(
+                [{"Дата отгрузки": slot.strftime("%d.%m.%Y")} for slot in slots],
+                hide_index=True,
+                use_container_width=True,
+            )
+
+    if capacity is not None and capacity.details:
+        with st.expander("Детализация по операциям"):
+            st.dataframe(
+                [
+                    {
+                        "Операция": detail.sequence_number,
+                        "Участок": detail.work_center_name,
+                        "Доступно часов": round(detail.available_hours, 2),
+                        "Занято часов": round(detail.occupied_hours, 2),
+                        "Свободно часов": round(detail.free_hours, 2),
+                        "Часов на 1000": round(detail.labor_hours_per_1000, 2),
+                        "Доступный тираж": round(detail.available_quantity),
+                        "Предупреждение": detail.warning or "",
+                    }
+                    for detail in capacity.details
+                ],
+                hide_index=True,
+                use_container_width=True,
+            )
+
+
+def _normalize_period_input(period: Any) -> tuple[date | None, date | None]:
+    """Normalize Streamlit date range value to start/end dates."""
+    if (
+        isinstance(period, tuple)
+        and len(period) == 2
+        and all(isinstance(item, date) for item in period)
+    ):
+        return period[0], period[1]
+    if (
+        isinstance(period, list)
+        and len(period) == 2
+        and all(isinstance(item, date) for item in period)
+    ):
+        return period[0], period[1]
+    if isinstance(period, date):
+        return period, period
+    return None, None
