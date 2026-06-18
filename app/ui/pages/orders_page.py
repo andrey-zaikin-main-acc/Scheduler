@@ -396,7 +396,9 @@ def _render_route_capacity_check(session, routes: list[Route]) -> None:
             "Ограничивающий участок", capacity.bottleneck_work_center or "—"
         )
         if capacity.max_quantity == 0 and not capacity.warnings:
-            st.info("В выбранном периоде нет доступной мощности для этого маршрута.")
+            st.info(
+                "В выбранном периоде нет доступного тиража, который можно реально отгрузить по этому маршруту."
+            )
     elif period_start is None or period_end is None:
         st.info("Выберите дату начала и дату окончания периода.")
 

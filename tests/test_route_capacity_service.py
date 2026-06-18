@@ -107,7 +107,9 @@ def test_route_capacity_is_minimum_across_operations(session: Session) -> None:
         route.id, date(2026, 7, 1), date(2026, 7, 1)
     )
 
-    assert result.max_quantity == 4000
+    assert result.theoretical_max_quantity == 4000
+    assert result.max_quantity == 1333
+    assert result.slots_for_max_quantity
     assert result.bottleneck_work_center == "Склейка"
 
 
@@ -128,7 +130,9 @@ def test_planned_operation_days_reduce_available_quantity(session: Session) -> N
         route.id, date(2026, 7, 1), date(2026, 7, 1)
     )
 
+    assert result.theoretical_max_quantity == 1000
     assert result.max_quantity == 1000
+    assert result.slots_for_max_quantity
     assert result.bottleneck_work_center == "Печать"
 
 
@@ -165,6 +169,7 @@ def test_quantity_above_capacity_does_not_calculate_slots(session: Session) -> N
 def test_slot_search_does_not_create_orders_or_saved_plan(session: Session) -> None:
     route, *_ = create_route(session, print_hours=8, glue_hours=8)
     before_orders = session.scalar(select(func.count(Order.id)))
+    before_planned_operations = session.scalar(select(func.count(PlannedOperation.id)))
     before_days = session.scalar(select(func.count(PlannedOperationDay.id)))
     before_conflicts = session.scalar(select(func.count(PlanningConflict.id)))
 
@@ -174,6 +179,10 @@ def test_slot_search_does_not_create_orders_or_saved_plan(session: Session) -> N
 
     assert slots
     assert session.scalar(select(func.count(Order.id))) == before_orders
+    assert (
+        session.scalar(select(func.count(PlannedOperation.id)))
+        == before_planned_operations
+    )
     assert session.scalar(select(func.count(PlannedOperationDay.id))) == before_days
     assert session.scalar(select(func.count(PlanningConflict.id))) == before_conflicts
 
@@ -186,6 +195,76 @@ def test_slot_search_returns_possible_dates(session: Session) -> None:
     )
 
     assert slots == [date(2026, 7, 1), date(2026, 7, 2), date(2026, 7, 3)]
+
+
+def test_capacity_max_quantity_has_available_shipment_slot(session: Session) -> None:
+    route, *_ = create_route(session, print_hours=8, glue_hours=8)
+
+    result = RouteCapacityService(session).calculate_route_capacity(
+        route.id, date(2026, 7, 1), date(2026, 7, 3)
+    )
+    slots = RouteCapacityService(session).find_available_shipment_slots(
+        route.id, result.max_quantity, date(2026, 7, 1), date(2026, 7, 3)
+    )
+
+    assert result.max_quantity > 0
+    assert slots
+
+
+def test_capacity_max_quantity_is_reduced_to_schedulable_limit(
+    session: Session,
+) -> None:
+    route, _, glue_center, _, glue_operation = create_route(
+        session, print_hours=10, glue_hours=20
+    )
+    glue_center.available_hours_per_day = 10
+    glue_operation.labor_hours_per_1000 = 4 / 3
+    session.commit()
+
+    result = RouteCapacityService(session).calculate_route_capacity(
+        route.id, date(2026, 7, 1), date(2026, 7, 2)
+    )
+
+    assert result.theoretical_max_quantity == 10000
+    assert result.max_quantity == 6000
+    assert result.slots_for_max_quantity
+
+
+def test_capacity_smaller_than_max_quantity_has_available_slot(
+    session: Session,
+) -> None:
+    route, *_ = create_route(session, print_hours=8, glue_hours=8)
+
+    result = RouteCapacityService(session).calculate_route_capacity(
+        route.id, date(2026, 7, 1), date(2026, 7, 3)
+    )
+    smaller_quantity = result.max_quantity // 2
+    slots = RouteCapacityService(session).find_available_shipment_slots(
+        route.id, smaller_quantity, date(2026, 7, 1), date(2026, 7, 3)
+    )
+
+    assert smaller_quantity > 0
+    assert slots
+
+
+def test_capacity_is_zero_when_no_positive_quantity_has_slots(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route, *_ = create_route(session, print_hours=8, glue_hours=8)
+
+    monkeypatch.setattr(
+        RouteCapacityService,
+        "_find_available_shipment_slots_unchecked",
+        lambda self, route, quantity, period_start, period_end: [],
+    )
+
+    result = RouteCapacityService(session).calculate_route_capacity(
+        route.id, date(2026, 7, 1), date(2026, 7, 2)
+    )
+
+    assert result.theoretical_max_quantity > 0
+    assert result.max_quantity == 0
+    assert result.slots_for_max_quantity == ()
 
 
 def test_slot_search_returns_empty_when_dates_do_not_fit(session: Session) -> None:
