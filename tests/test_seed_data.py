@@ -36,7 +36,16 @@ def test_seed_work_centers_match_excel_source() -> None:
 
         rows = session.scalars(select(WorkCenter).order_by(WorkCenter.name)).all()
 
-        assert {row.name: row.available_hours_per_day for row in rows} == dict(WORK_CENTER_SPECS)
+        assert {row.name: row.available_hours_per_day for row in rows} == {
+            name: hours for name, hours, _ in WORK_CENTER_SPECS
+        }
+        assert {
+            row.name: row.workday_start_time.isoformat(timespec="minutes")
+            for row in rows
+        } == {
+            name: start.isoformat(timespec="minutes")
+            for name, _, start in WORK_CENTER_SPECS
+        }
         assert all(row.is_active for row in rows)
 
 

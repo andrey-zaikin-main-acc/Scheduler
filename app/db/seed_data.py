@@ -2,7 +2,7 @@
 
 import argparse
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -25,13 +25,13 @@ from app.db.models import (
 
 TRANSFER_BATCH_QUANTITY = 1000.0
 
-WORK_CENTER_SPECS: tuple[tuple[str, float], ...] = (
-    ("Склейка", 3300.0),
-    ("Высечка", 1500.0),
-    ("Кашировка", 1000.0),
-    ("Резка_плоттер", 1000.0),
-    ("Цифровая_печать", 236.0),
-    ("Копакинг", 7560.0),
+WORK_CENTER_SPECS: tuple[tuple[str, float, time], ...] = (
+    ("Склейка", 3300.0, time(hour=9)),
+    ("Высечка", 1500.0, time(hour=9)),
+    ("Кашировка", 1000.0, time(hour=9)),
+    ("Резка_плоттер", 1000.0, time(hour=9)),
+    ("Цифровая_печать", 236.0, time(hour=9)),
+    ("Копакинг", 7560.0, time(hour=9)),
 )
 
 ROUTE_OPERATION_SEQUENCE: tuple[str, ...] = (
@@ -220,13 +220,19 @@ def _clear_planner_data(session: Session) -> None:
 
 def _seed_work_centers(session: Session) -> dict[str, WorkCenter]:
     result: dict[str, WorkCenter] = {}
-    for name, hours in WORK_CENTER_SPECS:
+    for name, hours, workday_start_time in WORK_CENTER_SPECS:
         work_center = session.scalar(select(WorkCenter).where(WorkCenter.name == name))
         if work_center is None:
-            work_center = WorkCenter(name=name, available_hours_per_day=hours, is_active=True)
+            work_center = WorkCenter(
+                name=name,
+                available_hours_per_day=hours,
+                workday_start_time=workday_start_time,
+                is_active=True,
+            )
             session.add(work_center)
         else:
             work_center.available_hours_per_day = hours
+            work_center.workday_start_time = workday_start_time
             work_center.is_active = True
         session.flush()
         result[name] = work_center

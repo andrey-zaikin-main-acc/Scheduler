@@ -1,9 +1,9 @@
 """SQLAlchemy models for the production planner MVP."""
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from typing import Optional
 
-from sqlalchemy import CheckConstraint, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Date, DateTime, Float, ForeignKey, Integer, String, Text, Time, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
@@ -46,6 +46,9 @@ class WorkCenter(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     available_hours_per_day: Mapped[float] = mapped_column(Float, nullable=False)
+    workday_start_time: Mapped[time] = mapped_column(
+        Time, default=time(hour=9), nullable=False
+    )
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)

@@ -28,6 +28,7 @@ def map_work_center_to_planning(work_center: WorkCenter) -> PlanningWorkCenter:
         id=work_center.id,
         name=work_center.name,
         available_hours_per_day=work_center.available_hours_per_day,
+        workday_start_time=work_center.workday_start_time,
     )
 
 

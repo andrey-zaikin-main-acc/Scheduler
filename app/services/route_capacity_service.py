@@ -10,11 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.constants import ORDER_STATUS_NEW
 from app.db.models import PlannedOperationDay, Route, RouteOperation, WorkCenter
-from app.planning.capacity_calendar import (
-    CapacityCalendar,
-    CapacityReservation,
-    WORKDAY_START,
-)
+from app.planning.capacity_calendar import CapacityCalendar, CapacityReservation
 from app.planning.entities import PlanningOrder, PlanningRouteOperation
 from app.planning.planner import PlanningEngine
 from app.services.planning_mapper import map_work_center_to_planning
@@ -268,9 +264,10 @@ class RouteCapacityService:
             start_dt = day.start_datetime
             end_dt = day.end_datetime
             if start_dt is None or end_dt is None:
-                start_dt = datetime.combine(day.date, WORKDAY_START) + timedelta(
-                    hours=fallback_offset[key]
+                workday_start, _ = calendar.workday_bounds(
+                    day.work_center_id, day.date
                 )
+                start_dt = workday_start + timedelta(hours=fallback_offset[key])
                 end_dt = start_dt + timedelta(hours=day.hours)
                 fallback_offset[key] += day.hours
             calendar._occupied_hours[

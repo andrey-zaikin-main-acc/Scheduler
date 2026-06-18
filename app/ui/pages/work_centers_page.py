@@ -1,5 +1,6 @@
 """Work centers directory page."""
 
+from datetime import datetime, time
 from typing import Any
 
 import streamlit as st
@@ -10,7 +11,14 @@ from app.repositories.work_centers_repository import WorkCentersRepository
 from app.ui.components.tables import work_center_rows
 from app.ui.pages.page_utils import recalculate_after_save
 
-EDITOR_COLUMNS = ["Выбран", "ID", "Название", "Доступные часы в день", "Активен"]
+EDITOR_COLUMNS = [
+    "Выбран",
+    "ID",
+    "Название",
+    "Доступные часы в день",
+    "Время начала рабочего дня",
+    "Активен",
+]
 DRAFT_ROW_SESSION_KEY = "work_centers_page_has_draft_row"
 SELECTED_ROW_SESSION_KEY = "work_centers_page_selected_id"
 EDITOR_KEY = "work_centers_page_editor"
@@ -98,6 +106,7 @@ def build_work_center_editor_rows(
                 "ID": None,
                 "Название": "",
                 "Доступные часы в день": 0.0,
+                "Время начала рабочего дня": "09:00",
                 "Активен": True,
             }
         )
@@ -117,6 +126,8 @@ def validate_work_center_row(
         errors.append("Участок с таким названием уже существует.")
     if hours is None or hours <= 0:
         errors.append("Доступные часы в день должны быть больше 0.")
+    if _parse_time(row.get("Время начала рабочего дня")) is None:
+        errors.append("Время начала рабочего дня должно быть в формате HH:MM.")
     if not isinstance(row.get("Активен"), bool):
         errors.append("Активность участка должна быть булевым значением.")
     return errors
@@ -179,6 +190,8 @@ def _row_to_payload(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": str(row["Название"]).strip(),
         "available_hours_per_day": float(row["Доступные часы в день"]),
+        "workday_start_time": _parse_time(row["Время начала рабочего дня"])
+        or time(hour=9),
         "is_active": bool(row["Активен"]),
     }
 
@@ -189,6 +202,8 @@ def _row_changed(row: dict[str, Any], item: WorkCenter) -> bool:
             str(row.get("Название") or "").strip() != item.name,
             _parse_float(row.get("Доступные часы в день"))
             != float(item.available_hours_per_day),
+            _parse_time(row.get("Время начала рабочего дня"))
+            != item.workday_start_time,
             bool(row.get("Активен")) != item.is_active,
         ]
     )
@@ -205,3 +220,18 @@ def _parse_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_time(value: Any) -> time | None:
+    if isinstance(value, time):
+        return value.replace(second=0, microsecond=0)
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    try:
+        parsed = datetime.strptime(value, "%H:%M").time()
+    except ValueError:
+        return None
+    if value != parsed.strftime("%H:%M"):
+        return None
+    return parsed

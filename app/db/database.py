@@ -25,6 +25,7 @@ def create_all() -> None:
     """Create all database tables."""
     ensure_data_dir()
     Base.metadata.create_all(bind=engine)
+    _ensure_work_center_workday_start_time_column()
     _ensure_planned_operation_day_intraday_columns()
 
 
@@ -40,6 +41,31 @@ def get_session() -> Iterator[Session]:
         yield session
     finally:
         session.close()
+
+
+def _ensure_work_center_workday_start_time_column() -> None:
+    """Add configurable workday start time to existing SQLite databases."""
+    inspector = inspect(engine)
+    if "work_centers" not in inspector.get_table_names():
+        return
+    existing_columns = {
+        column["name"] for column in inspector.get_columns("work_centers")
+    }
+    if "workday_start_time" in existing_columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE work_centers "
+                "ADD COLUMN workday_start_time TIME NOT NULL DEFAULT '09:00:00'"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE work_centers "
+                "SET workday_start_time = COALESCE(workday_start_time, '09:00:00')"
+            )
+        )
 
 
 def _ensure_planned_operation_day_intraday_columns() -> None:
