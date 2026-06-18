@@ -46,6 +46,8 @@ class RouteCapacityResult:
     route_name: str
     max_quantity: int
     bottleneck_work_center: str | None
+    theoretical_max_quantity: int = 0
+    slots_for_max_quantity: tuple[date, ...] = field(default_factory=tuple)
     details: tuple[RouteCapacityDetail, ...] = field(default_factory=tuple)
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
@@ -134,16 +136,30 @@ class RouteCapacityService:
             )
 
         if limits:
-            max_quantity, bottleneck = min(limits, key=lambda item: item[0])
+            theoretical_max_quantity, bottleneck = min(limits, key=lambda item: item[0])
         else:
-            max_quantity, bottleneck = 0.0, None
+            theoretical_max_quantity, bottleneck = 0.0, None
+
+        theoretical_max_quantity_int = max(0, math.floor(theoretical_max_quantity))
+        max_schedulable_quantity = 0
+        slots_for_max_quantity: list[date] = []
+        unique_warnings = tuple(dict.fromkeys(warnings))
+        if theoretical_max_quantity_int > 0 and not unique_warnings:
+            max_schedulable_quantity, slots_for_max_quantity = (
+                self._find_max_schedulable_quantity(
+                    route, theoretical_max_quantity_int, period_start, period_end
+                )
+            )
+
         return RouteCapacityResult(
             route.id,
             route.name,
-            max_quantity=max(0, math.floor(max_quantity)),
+            max_quantity=max_schedulable_quantity,
             bottleneck_work_center=bottleneck,
+            theoretical_max_quantity=theoretical_max_quantity_int,
+            slots_for_max_quantity=tuple(slots_for_max_quantity),
             details=tuple(details),
-            warnings=tuple(dict.fromkeys(warnings)),
+            warnings=unique_warnings,
         )
 
     def find_available_shipment_slots(
@@ -156,6 +172,43 @@ class RouteCapacityService:
         route = self._get_route(route_id)
         if route is None:
             return []
+        return self._find_available_shipment_slots_unchecked(
+            route, quantity, period_start, period_end
+        )
+
+    def _find_max_schedulable_quantity(
+        self, route: Route, upper_bound: int, period_start: date, period_end: date
+    ) -> tuple[int, list[date]]:
+        """Return the largest integer quantity that has at least one shipment slot."""
+        left = 1
+        right = upper_bound
+        best_quantity = 0
+        best_slots: list[date] = []
+
+        while left <= right:
+            mid = (left + right) // 2
+            slots = self._find_available_shipment_slots_unchecked(
+                route, mid, period_start, period_end
+            )
+            if slots:
+                best_quantity = mid
+                best_slots = slots
+                left = mid + 1
+            else:
+                right = mid - 1
+
+        return best_quantity, best_slots
+
+    def _find_available_shipment_slots_unchecked(
+        self, route: Route, quantity: float, period_start: date, period_end: date
+    ) -> list[date]:
+        """Return shipment slots for a quantity without recalculating capacity."""
+        if quantity <= 0:
+            return []
+
+        route_operations = tuple(
+            _map_route_operation(operation) for operation in route.operations
+        )
         slots: list[date] = []
         for shipment_date in _date_range(period_start, period_end):
             calendar = self._build_capacity_calendar(period_start, period_end)
@@ -167,9 +220,7 @@ class RouteCapacityService:
                     shipment_date=shipment_date,
                     status=ORDER_STATUS_NEW,
                 ),
-                tuple(
-                    _map_route_operation(operation) for operation in route.operations
-                ),
+                route_operations,
             )
             if result.is_success:
                 slots.append(shipment_date)
