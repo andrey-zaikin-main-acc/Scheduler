@@ -7,7 +7,8 @@ from datetime import date, datetime, time, timedelta
 
 from app.planning.entities import PlanningWorkCenter, ScheduledOperationDay
 
-DEFAULT_WORKDAY_START = time(hour=9)
+NORMALIZED_DAY_START = time.min
+NORMALIZED_DAY_END = time.max
 
 
 @dataclass(frozen=True)
@@ -43,12 +44,17 @@ class CapacityCalendar:
     def workday_bounds(
         self, work_center_id: int, day: date
     ) -> tuple[datetime, datetime]:
-        """Return start and end datetimes of the work center day."""
-        work_center = self._get_work_center(work_center_id)
-        start = datetime.combine(
-            day, work_center.workday_start_time or DEFAULT_WORKDAY_START
+        """Return normalized technical bounds of a calendar date.
+
+        ``available_hours_per_day`` is production capacity, not a calendar shift
+        duration.  The returned datetimes are only normalized Gantt anchors
+        inside the calendar date and must not be interpreted as actual shift
+        times.
+        """
+        self._get_work_center(work_center_id)
+        return datetime.combine(day, NORMALIZED_DAY_START), datetime.combine(
+            day, NORMALIZED_DAY_END
         )
-        return start, start + timedelta(hours=self.available_hours(work_center_id))
 
     def occupied_hours(self, work_center_id: int, day: date) -> float:
         """Return occupied hours for a work center on a date."""
@@ -111,7 +117,9 @@ class CapacityCalendar:
         while True:
             if self._can_reserve_contiguous(work_center_id, candidate, hours):
                 return candidate
-            candidate = self._next_reservation_end_or_next_day(work_center_id, candidate)
+            candidate = self._next_reservation_end_or_next_day(
+                work_center_id, candidate
+            )
 
     def reserve_contiguous_forward(
         self,
@@ -134,8 +142,15 @@ class CapacityCalendar:
         while remaining > 1e-9:
             work_start, work_end = self.workday_bounds(work_center_id, cursor.date())
             cursor = max(cursor, work_start)
-            used_hours = min(remaining, (work_end - cursor).total_seconds() / 3600)
-            end_datetime = cursor + timedelta(hours=used_hours)
+            remaining_day_hours = self._capacity_between_datetimes(
+                work_center_id, cursor, work_end
+            )
+            used_hours = min(remaining, remaining_day_hours)
+            end_datetime = cursor + self._hours_to_normalized_delta(
+                work_center_id, cursor.date(), used_hours
+            )
+            if end_datetime > work_end:
+                end_datetime = work_end
             key = (work_center_id, cursor.date())
             self._occupied_hours[key] += used_hours
             reservation = CapacityReservation(
@@ -184,13 +199,13 @@ class CapacityCalendar:
             reverse=True,
         ):
             if reservation.end_datetime <= cursor_end:
-                free += max(
-                    0.0, (cursor_end - reservation.end_datetime).total_seconds() / 3600
+                free += self._capacity_between_datetimes(
+                    work_center_id, reservation.end_datetime, cursor_end
                 )
                 cursor_end = min(cursor_end, reservation.start_datetime)
             elif reservation.start_datetime < cursor_end:
                 cursor_end = reservation.start_datetime
-        free += max(0.0, (cursor_end - work_start).total_seconds() / 3600)
+        free += self._capacity_between_datetimes(work_center_id, work_start, cursor_end)
         return free
 
     def total_free_hours(
@@ -247,7 +262,7 @@ class CapacityCalendar:
         hours: float,
         latest_end_datetime: datetime | None = None,
     ) -> tuple[datetime, datetime] | None:
-        duration = timedelta(hours=hours)
+        duration = self._hours_to_normalized_delta(work_center_id, day, hours)
         work_start, work_end = self.workday_bounds(work_center_id, day)
         cursor_end = (
             min(work_end, latest_end_datetime)
@@ -266,9 +281,7 @@ class CapacityCalendar:
             return cursor_end - duration, cursor_end
         return None
 
-    def _normalize_to_work_time(
-        self, work_center_id: int, value: datetime
-    ) -> datetime:
+    def _normalize_to_work_time(self, work_center_id: int, value: datetime) -> datetime:
         work_start, work_end = self.workday_bounds(work_center_id, value.date())
         if value < work_start:
             return work_start
@@ -296,7 +309,9 @@ class CapacityCalendar:
                 if reservation.start_datetime >= cursor:
                     next_busy_start = min(next_busy_start, reservation.start_datetime)
                     break
-            free_hours = max(0.0, (next_busy_start - cursor).total_seconds() / 3600)
+            free_hours = self._capacity_between_datetimes(
+                work_center_id, cursor, next_busy_start
+            )
             if free_hours <= 1e-9:
                 return False
             remaining -= free_hours
@@ -325,6 +340,32 @@ class CapacityCalendar:
         return self._normalize_to_work_time(
             work_center_id,
             datetime.combine(cursor.date() + timedelta(days=1), time.min),
+        )
+
+    def _hours_to_normalized_delta(
+        self, work_center_id: int, day: date, hours: float
+    ) -> timedelta:
+        capacity = self.available_hours(work_center_id)
+        if hours <= 0:
+            return timedelta(0)
+        start, end = self.workday_bounds(work_center_id, day)
+        normalized_seconds = (end - start).total_seconds()
+        return timedelta(seconds=normalized_seconds * hours / capacity)
+
+    def _capacity_between_datetimes(
+        self, work_center_id: int, start: datetime, end: datetime
+    ) -> float:
+        if end <= start:
+            return 0.0
+        day_start, day_end = self.workday_bounds(work_center_id, start.date())
+        bounded_start = max(start, day_start)
+        bounded_end = min(end, day_end)
+        if bounded_end <= bounded_start:
+            return 0.0
+        normalized_seconds = (day_end - day_start).total_seconds()
+        used_seconds = (bounded_end - bounded_start).total_seconds()
+        return round(
+            self.available_hours(work_center_id) * used_seconds / normalized_seconds, 9
         )
 
     def _get_work_center(self, work_center_id: int) -> PlanningWorkCenter:

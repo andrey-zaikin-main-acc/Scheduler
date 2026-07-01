@@ -8,13 +8,20 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.database import Base
 from app.db.models import Order, Route, RouteOperation, Setting, WorkCenter
-from app.db.seed_data import ROUTE_SPECS, WORK_CENTER_SPECS, reset_seed_data, seed_demo_data
+from app.db.seed_data import (
+    ROUTE_SPECS,
+    WORK_CENTER_SPECS,
+    reset_seed_data,
+    seed_demo_data,
+)
 
 
 def make_session() -> Session:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    session_factory = sessionmaker(
+        bind=engine, autoflush=False, autocommit=False, expire_on_commit=False
+    )
     return session_factory()
 
 
@@ -78,7 +85,9 @@ def test_seed_routes_match_excel_source_and_skip_zero_labor_operations() -> None
             3626.428,
             506.71,
         ]
-        assert [operation.min_transfer_quantity_to_next for operation in operations] == [
+        assert [
+            operation.min_transfer_quantity_to_next for operation in operations
+        ] == [
             1000.0,
             1000.0,
             1000.0,
@@ -115,9 +124,14 @@ def test_seed_demo_data_removes_legacy_demo_records() -> None:
 
         seed_demo_data(session)
 
-        assert session.scalar(select(WorkCenter).where(WorkCenter.name == "Печать")) is None
+        assert (
+            session.scalar(select(WorkCenter).where(WorkCenter.name == "Печать"))
+            is None
+        )
         assert session.scalar(select(Route).where(Route.name == "Маршрут A")) is None
-        assert session.scalar(select(Order).where(Order.order_number == "MVP-101")) is None
+        assert (
+            session.scalar(select(Order).where(Order.order_number == "MVP-101")) is None
+        )
 
 
 def test_reset_seed_data_leaves_only_excel_seed_dataset() -> None:
@@ -127,7 +141,41 @@ def test_reset_seed_data_leaves_only_excel_seed_dataset() -> None:
 
         reset_seed_data(session)
 
-        assert session.scalar(select(WorkCenter).where(WorkCenter.name == "Лишний участок")) is None
+        assert (
+            session.scalar(
+                select(WorkCenter).where(WorkCenter.name == "Лишний участок")
+            )
+            is None
+        )
         assert session.query(WorkCenter).count() == 6
         assert session.query(Route).count() == 8
         assert session.query(Order).count() == 5
+
+
+def test_seed_planned_orders_do_not_start_or_finish_after_shipment_date() -> None:
+    from app.constants import ORDER_STATUS_PLANNED
+    from app.db.models import PlannedOperation, PlannedOperationDay
+    from app.services.recalculation_service import RecalculationService
+
+    with make_session() as session:
+        seed_demo_data(session)
+        RecalculationService(
+            session, planning_start_date=date.today()
+        ).recalculate_plan()
+
+        planned_orders = session.scalars(
+            select(Order).where(Order.status == ORDER_STATUS_PLANNED)
+        ).all()
+        assert planned_orders
+        for order in planned_orders:
+            assert order.calculated_start_date is not None
+            assert order.calculated_start_date <= order.shipment_date
+            last_finish = session.scalar(
+                select(PlannedOperationDay.end_datetime)
+                .join(PlannedOperationDay.planned_operation)
+                .where(PlannedOperation.order_id == order.id)
+                .order_by(PlannedOperationDay.end_datetime.desc())
+                .limit(1)
+            )
+            assert last_finish is not None
+            assert last_finish.date() <= order.shipment_date

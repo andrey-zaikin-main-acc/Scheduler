@@ -108,7 +108,7 @@ def test_route_capacity_is_minimum_across_operations(session: Session) -> None:
     )
 
     assert result.theoretical_max_quantity == 4000
-    assert result.max_quantity == 1333
+    assert result.max_quantity == 2222
     assert result.slots_for_max_quantity
     assert result.bottleneck_work_center == "Склейка"
 
@@ -131,7 +131,7 @@ def test_planned_operation_days_reduce_available_quantity(session: Session) -> N
     )
 
     assert result.theoretical_max_quantity == 1000
-    assert result.max_quantity == 1000
+    assert result.max_quantity == 800
     assert result.slots_for_max_quantity
     assert result.bottleneck_work_center == "Печать"
 

@@ -188,16 +188,16 @@ def test_single_order_is_compacted_to_shipment_datetime_without_capacity_competi
             day.start_datetime
             for operation in result.operations
             for day in operation.days
-        ).hour
-        == 15
+        ).date()
+        == order.shipment_date
     )
     assert (
         max(
             day.end_datetime
             for operation in result.operations
             for day in operation.days
-        ).hour
-        == 17
+        ).date()
+        == order.shipment_date
     )
 
 
@@ -377,7 +377,9 @@ def test_single_order_without_ideal_start_sorting_stays_compact() -> None:
     assert result.calculated_start_date == date(2026, 7, 10)
 
 
-def test_successfully_planned_order_starts_and_finishes_no_later_than_shipment_date() -> None:
+def test_successfully_planned_order_starts_and_finishes_no_later_than_shipment_date() -> (
+    None
+):
     calendar = CapacityCalendar(
         [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)]
     )
@@ -402,12 +404,19 @@ def test_successfully_planned_order_starts_and_finishes_no_later_than_shipment_d
     assert result.is_success
     assert result.calculated_start_date is not None
     assert result.calculated_start_date <= order.shipment_date
-    assert max(
-        day.end_datetime for operation in result.operations for day in operation.days
-    ).date() <= order.shipment_date
+    assert (
+        max(
+            day.end_datetime
+            for operation in result.operations
+            for day in operation.days
+        ).date()
+        <= order.shipment_date
+    )
 
 
-def test_order_that_would_finish_after_shipment_calendar_date_returns_conflict() -> None:
+def test_daily_capacity_larger_than_24_can_still_fit_in_shipment_calendar_date() -> (
+    None
+):
     calendar = CapacityCalendar(
         [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=30)]
     )
@@ -429,6 +438,39 @@ def test_order_that_would_finish_after_shipment_calendar_date_returns_conflict()
 
     result = engine.plan_order(order, route_operations)
 
-    assert not result.is_success
-    assert result.calculated_start_date is None
-    assert result.conflict is not None
+    assert result.is_success
+    assert result.calculated_start_date == order.shipment_date
+    assert (
+        max(day.end_datetime for op in result.operations for day in op.days).date()
+        == order.shipment_date
+    )
+
+
+def test_high_daily_capacity_can_finish_half_day_need_on_shipment_date() -> None:
+    calendar = CapacityCalendar(
+        [PlanningWorkCenter(id=1, name="Копакинг", available_hours_per_day=7560)]
+    )
+    engine = PlanningEngine(
+        capacity_calendar=calendar, planning_start_date=date(2026, 7, 10)
+    )
+    order = PlanningOrder(
+        id=208, quantity=1000, shipment_date=date(2026, 7, 10), status=ORDER_STATUS_NEW
+    )
+    route_operations = (
+        PlanningRouteOperation(
+            id=1,
+            sequence_number=1,
+            work_center_id=1,
+            work_center_name="Копакинг",
+            labor_hours_per_1000=3780,
+        ),
+    )
+
+    result = engine.plan_order(order, route_operations)
+
+    assert result.is_success
+    assert result.calculated_start_date == order.shipment_date
+    assert (
+        max(day.end_datetime for op in result.operations for day in op.days).date()
+        == order.shipment_date
+    )

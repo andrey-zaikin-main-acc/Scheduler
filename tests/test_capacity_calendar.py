@@ -53,15 +53,15 @@ def test_capacity_calendar_assigns_non_overlapping_latest_intraday_intervals() -
     first = calendar.reserve(order_id=101, work_center_id=1, day=day, hours=3)
     second = calendar.reserve(order_id=102, work_center_id=1, day=day, hours=4)
 
-    assert first.start_datetime.isoformat(sep=" ") == "2026-07-10 14:00:00"
-    assert first.end_datetime.isoformat(sep=" ") == "2026-07-10 17:00:00"
-    assert second.start_datetime.isoformat(sep=" ") == "2026-07-10 10:00:00"
-    assert second.end_datetime.isoformat(sep=" ") == "2026-07-10 14:00:00"
+    assert first.start_datetime.date() == day
+    assert first.end_datetime.date() == day
+    assert second.start_datetime.date() == day
+    assert second.end_datetime.date() == day
     assert second.end_datetime <= first.start_datetime
     assert calendar.free_hours(1, day) == 1
 
 
-def test_capacity_calendar_uses_work_center_start_time_for_bounds() -> None:
+def test_capacity_calendar_uses_normalized_calendar_day_bounds() -> None:
     calendar = CapacityCalendar(
         [
             PlanningWorkCenter(
@@ -83,18 +83,18 @@ def test_capacity_calendar_uses_work_center_start_time_for_bounds() -> None:
     assert tuple(
         value.isoformat(sep=" ") for value in calendar.workday_bounds(1, day)
     ) == (
-        "2026-07-10 08:00:00",
-        "2026-07-10 16:00:00",
+        "2026-07-10 00:00:00",
+        "2026-07-10 23:59:59.999999",
     )
     assert tuple(
         value.isoformat(sep=" ") for value in calendar.workday_bounds(2, day)
     ) == (
-        "2026-07-10 10:00:00",
-        "2026-07-10 16:00:00",
+        "2026-07-10 00:00:00",
+        "2026-07-10 23:59:59.999999",
     )
 
 
-def test_capacity_calendar_carries_remainder_to_work_center_start_time() -> None:
+def test_capacity_calendar_carries_remainder_to_next_calendar_date() -> None:
     calendar = CapacityCalendar(
         [
             PlanningWorkCenter(
@@ -115,20 +115,39 @@ def test_capacity_calendar_carries_remainder_to_work_center_start_time() -> None
 
     assert [item.start_datetime.isoformat(sep=" ") for item in placements] == [
         "2026-07-10 14:00:00",
-        "2026-07-11 10:00:00",
+        "2026-07-11 00:00:00",
     ]
     assert [item.end_datetime.isoformat(sep=" ") for item in placements] == [
-        "2026-07-10 16:00:00",
-        "2026-07-11 12:00:00",
+        "2026-07-10 23:59:59.999999",
+        "2026-07-11 06:00:00",
     ]
 
 
-def test_capacity_calendar_defaults_workday_start_to_09_00() -> None:
+def test_capacity_calendar_defaults_to_normalized_calendar_date() -> None:
     calendar = CapacityCalendar(
         [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)]
     )
 
     start, end = calendar.workday_bounds(1, date(2026, 7, 10))
 
-    assert start.isoformat(sep=" ") == "2026-07-10 09:00:00"
-    assert end.isoformat(sep=" ") == "2026-07-10 17:00:00"
+    assert start.isoformat(sep=" ") == "2026-07-10 00:00:00"
+    assert end.isoformat(sep=" ") == "2026-07-10 23:59:59.999999"
+
+
+def test_large_available_hours_does_not_create_month_long_work_interval() -> None:
+    calendar = CapacityCalendar(
+        [PlanningWorkCenter(id=1, name="Копакинг", available_hours_per_day=7560)]
+    )
+
+    start, end = calendar.workday_bounds(1, date(2026, 7, 10))
+    placement = calendar.reserve(
+        order_id=101,
+        work_center_id=1,
+        day=date(2026, 7, 10),
+        hours=3780,
+    )
+
+    assert start.date() == date(2026, 7, 10)
+    assert end.date() == date(2026, 7, 10)
+    assert placement.start_datetime.date() == date(2026, 7, 10)
+    assert placement.end_datetime.date() == date(2026, 7, 10)
