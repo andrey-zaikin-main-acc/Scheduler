@@ -16,6 +16,9 @@ from app.planning.entities import (
 from app.planning.order_preparation import PreparedOrder, prepare_order
 
 DAYS_PER_SEARCH_MONTH = 31
+NORMALIZED_DAY_HOURS = (
+    datetime.combine(date.min, time.max) - datetime.combine(date.min, time.min)
+).total_seconds() / 3600
 
 
 class PlanningEngine:
@@ -192,7 +195,9 @@ class PlanningEngine:
             incoming_ready = next_incoming_ready
 
         calculated_start_date = min(
-            day.start_datetime for operation in placed_operations for day in operation.days
+            day.start_datetime
+            for operation in placed_operations
+            for day in operation.days
         ).date()
         return PlannedOrderResult(
             order_id=order.id,
@@ -231,7 +236,12 @@ class PlanningEngine:
                 batch_hours = (
                     batch_quantity * route_operation.labor_hours_per_1000 / 1000
                 )
-                batch_finish = batch_start + batch_hours
+                daily_capacity = self.capacity_calendar.available_hours(
+                    route_operation.work_center_id
+                )
+                batch_finish = batch_start + (
+                    batch_hours / daily_capacity * NORMALIZED_DAY_HOURS
+                )
                 operation_available_at = batch_finish
                 next_incoming_ready.append((batch_quantity, batch_finish))
 
@@ -385,10 +395,7 @@ class PlanningEngine:
     def _shipment_deadline(
         self, operation: PlanningRouteOperation, shipment_date: date
     ) -> datetime:
-        _, shipment_deadline = self.capacity_calendar.workday_bounds(
-            operation.work_center_id, shipment_date
-        )
-        return min(shipment_deadline, datetime.combine(shipment_date, time.max))
+        return datetime.combine(shipment_date, time.max)
 
     def _result_fits_shipment_deadline(
         self, result: PlannedOrderResult, shipment_date: date

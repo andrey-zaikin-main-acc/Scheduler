@@ -136,7 +136,9 @@ class RouteCapacityService:
         else:
             theoretical_max_quantity, bottleneck = 0.0, None
 
-        theoretical_max_quantity_int = max(0, math.floor(theoretical_max_quantity))
+        theoretical_max_quantity_int = max(
+            0, math.floor(theoretical_max_quantity + 1e-6)
+        )
         max_schedulable_quantity = 0
         slots_for_max_quantity: list[date] = []
         unique_warnings = tuple(dict.fromkeys(warnings))
@@ -264,11 +266,16 @@ class RouteCapacityService:
             start_dt = day.start_datetime
             end_dt = day.end_datetime
             if start_dt is None or end_dt is None:
-                workday_start, _ = calendar.workday_bounds(
-                    day.work_center_id, day.date
+                workday_start, _ = calendar.workday_bounds(day.work_center_id, day.date)
+                start_dt = (
+                    workday_start
+                    + calendar._hours_to_normalized_delta(  # noqa: SLF001
+                        day.work_center_id, day.date, fallback_offset[key]
+                    )
                 )
-                start_dt = workday_start + timedelta(hours=fallback_offset[key])
-                end_dt = start_dt + timedelta(hours=day.hours)
+                end_dt = start_dt + calendar._hours_to_normalized_delta(  # noqa: SLF001
+                    day.work_center_id, day.date, day.hours
+                )
                 fallback_offset[key] += day.hours
             calendar._occupied_hours[
                 key
