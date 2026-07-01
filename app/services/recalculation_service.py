@@ -99,9 +99,15 @@ class RecalculationService:
                 continue
 
             if result.is_success:
-                self._persist_successful_result(result, order)
-                planned_order_count += 1
-                planned_operation_count += len(result.operations)
+                guarded_result = self._guard_successful_result(result, order)
+                if guarded_result.is_success:
+                    self._persist_successful_result(guarded_result, order)
+                    planned_order_count += 1
+                    planned_operation_count += len(guarded_result.operations)
+                else:
+                    self._persist_conflict_result(guarded_result)
+                    conflicted_order_count += 1
+                    conflict_count += 1
             else:
                 self._persist_conflict_result(result)
                 conflicted_order_count += 1
@@ -164,6 +170,48 @@ class RecalculationService:
                     )
                 )
         return prepared_orders, invalid_results
+
+    def _guard_successful_result(
+        self, result: PlannedOrderResult, order: Order
+    ) -> PlannedOrderResult:
+        """Prevent persisting a planned order that misses its shipment date."""
+        last_finish = None
+        if result.operations:
+            last_finish = max(
+                day.end_datetime
+                for operation in result.operations
+                for day in operation.days
+            )
+        misses_start_deadline = (
+            result.calculated_start_date is None
+            or result.calculated_start_date > order.shipment_date
+        )
+        misses_finish_deadline = (
+            last_finish is None or last_finish.date() > order.shipment_date
+        )
+        if not misses_start_deadline and not misses_finish_deadline:
+            return result
+
+        return PlannedOrderResult(
+            order_id=order.id,
+            calculated_start_date=None,
+            conflict=PlanningConflict(
+                order_id=order.id,
+                shipment_date=order.shipment_date,
+                work_center_id=None,
+                required_hours=sum(
+                    operation.required_hours for operation in result.operations
+                ),
+                available_hours=0.0,
+                deficit_hours=0.0,
+                blocking_order_ids=(),
+                reason=(
+                    "Заказ не может быть сохранён как запланированный: "
+                    "дата запуска или фактическое окончание последней операции "
+                    "позже срока отгрузки."
+                ),
+            ),
+        )
 
     def _persist_successful_result(
         self, result: PlannedOrderResult, order: Order

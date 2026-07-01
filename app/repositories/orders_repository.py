@@ -67,6 +67,8 @@ class OrdersRepository:
         order = self.get_order(order_id)
         if order is None:
             return None
+        if order.status != status:
+            order.calculated_start_date = None
         order.status = status
         self.session.flush()
         return order
@@ -87,6 +89,12 @@ class OrdersRepository:
         order = self.get_order(order_id)
         if order is None:
             return None
+        planning_inputs_changed = (
+            float(order.quantity) != float(quantity)
+            or order.shipment_date != shipment_date
+            or order.route_id != route_id
+            or order.status != status
+        )
         order.order_number = order_number
         order.client_name = client_name
         order.product_name = product_name
@@ -94,6 +102,8 @@ class OrdersRepository:
         order.shipment_date = shipment_date
         order.route_id = route_id
         order.status = status
+        if planning_inputs_changed:
+            order.calculated_start_date = None
         self.session.flush()
         return order
 

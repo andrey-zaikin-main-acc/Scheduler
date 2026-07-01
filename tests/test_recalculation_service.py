@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.constants import ORDER_STATUS_CONFLICT, ORDER_STATUS_NEW, ORDER_STATUS_PLANNED
 from app.db.database import Base
 from app.db.models import Order, PlanChange, PlannedOperation, PlannedOperationDay, PlanningConflict, Route, RouteOperation, WorkCenter
+from app.repositories.orders_repository import OrdersRepository
 from app.services.recalculation_service import RecalculationService
 
 
@@ -130,3 +131,90 @@ def test_recalculation_service_persists_plan_changes(session: Session) -> None:
     assert len(changes) == 1
     assert changes[0].change_type == "created"
     assert changes[0].new_start_date == date(2026, 7, 10)
+
+
+def test_recalculation_does_not_persist_planned_order_after_shipment_deadline(session: Session) -> None:
+    route = create_route_with_operation(session, hours_per_day=30, labor_hours_per_1000=20)
+    order = Order(
+        order_number="R-005",
+        client_name="Клиент",
+        product_name="Продукт",
+        quantity=1000,
+        shipment_date=date(2026, 7, 10),
+        route_id=route.id,
+        status=ORDER_STATUS_NEW,
+    )
+    session.add(order)
+    session.commit()
+
+    summary = RecalculationService(session, planning_start_date=date(2026, 7, 10)).recalculate_plan()
+
+    assert summary.planned_orders == 0
+    assert summary.conflicts == 1
+    assert order.status == ORDER_STATUS_CONFLICT
+    assert order.calculated_start_date is None
+    assert session.query(PlannedOperation).count() == 0
+
+
+def test_recalculation_recomputes_start_and_status_after_shipment_date_change(session: Session) -> None:
+    route = create_route_with_operation(session, hours_per_day=8, labor_hours_per_1000=8)
+    order = Order(
+        order_number="R-006",
+        client_name="Клиент",
+        product_name="Продукт",
+        quantity=1000,
+        shipment_date=date(2026, 7, 10),
+        route_id=route.id,
+        status=ORDER_STATUS_NEW,
+    )
+    session.add(order)
+    session.commit()
+
+    service = RecalculationService(session, planning_start_date=date(2026, 7, 1))
+    service.recalculate_plan()
+    assert order.status == ORDER_STATUS_PLANNED
+    assert order.calculated_start_date == date(2026, 7, 10)
+
+    order.shipment_date = date(2026, 7, 1)
+    session.commit()
+    service.recalculate_plan()
+
+    assert order.status == ORDER_STATUS_PLANNED
+    assert order.calculated_start_date == date(2026, 7, 1)
+    last_day = session.query(PlannedOperationDay).one()
+    assert last_day.end_datetime.date() <= order.shipment_date
+
+
+def test_order_update_clears_stale_calculated_start_date_before_recalculation(session: Session) -> None:
+    route = create_route_with_operation(session, hours_per_day=8, labor_hours_per_1000=8)
+    order = Order(
+        order_number="R-007",
+        client_name="Клиент",
+        product_name="Продукт",
+        quantity=1000,
+        shipment_date=date(2026, 7, 10),
+        route_id=route.id,
+        status=ORDER_STATUS_PLANNED,
+        calculated_start_date=date(2026, 7, 10),
+    )
+    session.add(order)
+    session.commit()
+
+    updated = OrdersRepository(session).update_order(
+        order.id,
+        order_number="R-007",
+        client_name="Клиент",
+        product_name="Продукт",
+        quantity=1000,
+        shipment_date=date(2026, 7, 1),
+        route_id=route.id,
+        status=ORDER_STATUS_PLANNED,
+    )
+
+    assert updated is not None
+    assert updated.calculated_start_date is None
+
+    RecalculationService(session, planning_start_date=date(2026, 7, 1)).recalculate_plan()
+
+    assert updated.status == ORDER_STATUS_PLANNED
+    assert updated.calculated_start_date == date(2026, 7, 1)
