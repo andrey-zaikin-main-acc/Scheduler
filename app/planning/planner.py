@@ -1,7 +1,7 @@
 """Pure MVP planning engine."""
 
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from app.config import MAX_BACKWARD_SEARCH_MONTHS
 from app.planning.capacity_calendar import CapacityCalendar
@@ -85,7 +85,9 @@ class PlanningEngine:
                     for operation in planned_or_conflict.operations
                     for day in operation.days
                 )
-                if finish <= latest_finish:
+                if finish <= latest_finish and self._result_fits_shipment_deadline(
+                    planned_or_conflict, order.shipment_date
+                ):
                     best_result = planned_or_conflict
                     break
             else:
@@ -386,7 +388,21 @@ class PlanningEngine:
         _, shipment_deadline = self.capacity_calendar.workday_bounds(
             operation.work_center_id, shipment_date
         )
-        return shipment_deadline
+        return min(shipment_deadline, datetime.combine(shipment_date, time.max))
+
+    def _result_fits_shipment_deadline(
+        self, result: PlannedOrderResult, shipment_date: date
+    ) -> bool:
+        if result.calculated_start_date is None or not result.operations:
+            return False
+        if result.calculated_start_date > shipment_date:
+            return False
+        last_finish = max(
+            day.end_datetime
+            for operation in result.operations
+            for day in operation.days
+        )
+        return last_finish.date() <= shipment_date
 
     def _split_scheduled_operation(
         self, prepared_order: PreparedOrder, scheduled_operation: ScheduledOperation
