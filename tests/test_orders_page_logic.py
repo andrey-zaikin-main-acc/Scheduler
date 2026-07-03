@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -316,3 +316,153 @@ def test_reopening_after_save_without_save_button_does_not_recalculate(monkeypat
 
     assert repository.updated == []
     assert recalculations == []
+
+class _FakeColumn:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def metric(self, *args, **kwargs):
+        pass
+
+
+class _FakeExpander(_FakeColumn):
+    pass
+
+
+class _FakeRouteCapacityStreamlit(_FakeStreamlit):
+    def __init__(self, *, clicked: set[str] | None = None, quantity: float = 0.0) -> None:
+        super().__init__()
+        self.clicked = clicked or set()
+        self.quantity = quantity
+        self.buttons = []
+        self.dataframes = []
+        self.info_messages = []
+        self.write_messages = []
+
+    def subheader(self, message: str) -> None:
+        pass
+
+    def caption(self, message: str) -> None:
+        pass
+
+    def columns(self, count: int):
+        return [_FakeColumn() for _ in range(count)]
+
+    def date_input(self, *args, **kwargs):
+        return kwargs["value"]
+
+    def selectbox(self, *args, **kwargs):
+        options = kwargs["options"]
+        return options[0] if options else None
+
+    def number_input(self, *args, **kwargs):
+        return self.quantity
+
+    def button(self, label: str, **kwargs):
+        self.buttons.append((label, kwargs))
+        return label in self.clicked
+
+    def info(self, message: str) -> None:
+        self.info_messages.append(message)
+
+    def write(self, message: str) -> None:
+        self.write_messages.append(message)
+
+    def dataframe(self, rows, **kwargs):
+        self.dataframes.append(rows)
+
+    def expander(self, label: str):
+        return _FakeExpander()
+
+
+def test_capacity_not_calculated_on_plain_render(monkeypatch) -> None:
+    import app.ui.pages.orders_page as orders_page
+
+    fake_st = _FakeRouteCapacityStreamlit()
+    route = Route(id=1, name="маршрут")
+    calls = []
+
+    class FakeService:
+        def __init__(self, session):
+            pass
+
+        def calculate_route_capacity(self, *args):
+            calls.append(args)
+            raise AssertionError("capacity must not be calculated on render")
+
+    monkeypatch.setattr(orders_page, "st", fake_st)
+    monkeypatch.setattr(orders_page, "RouteCapacityService", FakeService)
+
+    orders_page._render_route_capacity_check(object(), [route])
+
+    assert calls == []
+    assert any(label == "Рассчитать доступный тираж" for label, _ in fake_st.buttons)
+
+
+def test_capacity_calculated_only_by_calculate_button(monkeypatch) -> None:
+    import app.ui.pages.orders_page as orders_page
+    from app.services.route_capacity_service import RouteCapacityResult
+
+    fake_st = _FakeRouteCapacityStreamlit(clicked={"Рассчитать доступный тираж"})
+    route = Route(id=1, name="маршрут")
+    calls = []
+    result = RouteCapacityResult(route.id, route.name, 1000, "участок")
+
+    class FakeService:
+        def __init__(self, session):
+            pass
+
+        def calculate_route_capacity(self, *args):
+            calls.append(args)
+            return result
+
+    monkeypatch.setattr(orders_page, "st", fake_st)
+    monkeypatch.setattr(orders_page, "RouteCapacityService", FakeService)
+
+    orders_page._render_route_capacity_check(object(), [route])
+
+    saved_params = fake_st.session_state[orders_page.ROUTE_CAPACITY_RESULT_SESSION_KEY]["params"]
+    assert calls == [saved_params]
+    assert fake_st.session_state[orders_page.ROUTE_CAPACITY_RESULT_SESSION_KEY]["result"] is result
+
+
+def test_zero_quantity_stops_before_slot_service(monkeypatch) -> None:
+    import app.ui.pages.orders_page as orders_page
+    from app.services.route_capacity_service import RouteCapacityResult
+
+    fake_st = _FakeRouteCapacityStreamlit(clicked={"Показать свободные слоты отгрузки"}, quantity=0.0)
+    route = Route(id=1, name="маршрут")
+    period_start = date.today().replace(day=1)
+    next_month = (period_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    period_end = next_month - timedelta(days=1)
+    fake_st.session_state[orders_page.ROUTE_CAPACITY_RESULT_SESSION_KEY] = {
+        "params": (route.id, period_start, period_end),
+        "result": RouteCapacityResult(route.id, route.name, 1000, "участок"),
+    }
+    calls = []
+
+    class FakeService:
+        def __init__(self, session):
+            pass
+
+        def find_available_shipment_slots_for_capacity(self, *args):
+            calls.append(args)
+            return []
+
+    monkeypatch.setattr(orders_page, "st", fake_st)
+    monkeypatch.setattr(orders_page, "RouteCapacityService", FakeService)
+
+    orders_page._render_route_capacity_check(object(), [route])
+
+    assert calls == []
+    assert "Тираж должен быть больше 0" in fake_st.error_messages
+
+
+def test_save_button_is_not_primary() -> None:
+    source = __import__("pathlib").Path("app/ui/pages/orders_page.py").read_text()
+    save_call = source.split('save_requested = st.button(', 1)[1].split(')', 1)[0]
+    assert '"Сохранить изменения"' in save_call
+    assert 'type="primary"' not in save_call

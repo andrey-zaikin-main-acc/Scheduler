@@ -168,9 +168,21 @@ class RouteCapacityService:
     ) -> list[date]:
         """Return shipment dates where a simulated order fits without persisting changes."""
         capacity = self.calculate_route_capacity(route_id, period_start, period_end)
+        return self.find_available_shipment_slots_for_capacity(
+            capacity, quantity, period_start, period_end
+        )
+
+    def find_available_shipment_slots_for_capacity(
+        self,
+        capacity: RouteCapacityResult,
+        quantity: float,
+        period_start: date,
+        period_end: date,
+    ) -> list[date]:
+        """Return shipment dates using an already confirmed capacity result."""
         if quantity <= 0 or quantity > capacity.max_quantity or capacity.warnings:
             return []
-        route = self._get_route(route_id)
+        route = self._get_route(capacity.route_id)
         if route is None:
             return []
         return self._find_available_shipment_slots_unchecked(

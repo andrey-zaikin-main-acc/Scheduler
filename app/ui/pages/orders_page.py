@@ -173,7 +173,6 @@ def render_orders_page() -> None:
         )
         save_requested = st.button(
             "Сохранить изменения",
-            type="primary",
             use_container_width=True,
             disabled=not routes,
         )
@@ -382,11 +381,48 @@ def _parse_quantity(value: Any) -> float | None:
         return None
 
 
+ROUTE_CAPACITY_RESULT_SESSION_KEY = "orders_route_capacity_result"
+ROUTE_CAPACITY_SLOTS_SESSION_KEY = "orders_route_capacity_slots"
+
+
+def _route_capacity_params(
+    route_id: int, period_start: date, period_end: date
+) -> tuple[int, date, date]:
+    """Return a stable key for a capacity result."""
+    return route_id, period_start, period_end
+
+
+def _get_current_capacity_result(route_id: int, period_start: date, period_end: date):
+    """Return saved capacity only when it matches current route and period."""
+    saved = st.session_state.get(ROUTE_CAPACITY_RESULT_SESSION_KEY)
+    params = _route_capacity_params(route_id, period_start, period_end)
+    if isinstance(saved, dict) and saved.get("params") == params:
+        return saved.get("result")
+    return None
+
+
+def _get_current_slots(
+    route_id: int, period_start: date, period_end: date, quantity: float
+):
+    """Return saved slots only when they match current route, period and quantity."""
+    saved = st.session_state.get(ROUTE_CAPACITY_SLOTS_SESSION_KEY)
+    params = (*_route_capacity_params(route_id, period_start, period_end), quantity)
+    if isinstance(saved, dict) and saved.get("params") == params:
+        return saved.get("slots")
+    return None
+
+
+def _clear_route_capacity_slots() -> None:
+    """Clear saved shipment slots after input changes or stale calculations."""
+    st.session_state.pop(ROUTE_CAPACITY_SLOTS_SESSION_KEY, None)
+
+
 def _render_route_capacity_check(session, routes: list[Route]) -> None:
     """Render preliminary capacity and shipment slot check without order creation."""
     st.subheader("Проверка доступного тиража и слотов отгрузки")
     st.caption(
-        "Предварительный расчёт не создаёт заказ и не изменяет текущий производственный план."
+        "Предварительный расчёт не создаёт заказ и не изменяет текущий производственный план. "
+        "Нажмите «Рассчитать доступный тираж», чтобы выполнить проверку мощности."
     )
 
     today = date.today()
@@ -411,6 +447,15 @@ def _render_route_capacity_check(session, routes: list[Route]) -> None:
             key="orders_route_capacity_route",
             disabled=not route_names,
         )
+    with qty_col:
+        quantity = st.number_input(
+            "Желаемый тираж",
+            min_value=0.0,
+            step=100.0,
+            value=0.0,
+            key="orders_route_capacity_quantity",
+        )
+
     period_start, period_end = _normalize_period_input(period)
     route_by_name = {route.name: route for route in routes}
     selected_route = (
@@ -418,14 +463,34 @@ def _render_route_capacity_check(session, routes: list[Route]) -> None:
     )
 
     capacity = None
-    if (
-        selected_route is not None
-        and period_start is not None
-        and period_end is not None
+    if selected_route is None or period_start is None or period_end is None:
+        st.info("Выберите дату начала, дату окончания периода и маршрут.")
+    else:
+        capacity = _get_current_capacity_result(
+            selected_route.id, period_start, period_end
+        )
+        if capacity is None:
+            _clear_route_capacity_slots()
+
+    if st.button(
+        "Рассчитать доступный тираж",
+        disabled=selected_route is None or period_start is None or period_end is None,
     ):
+        if selected_route is None or period_start is None or period_end is None:
+            st.error("Выберите период и маршрут.")
+            return
         capacity = RouteCapacityService(session).calculate_route_capacity(
             selected_route.id, period_start, period_end
         )
+        st.session_state[ROUTE_CAPACITY_RESULT_SESSION_KEY] = {
+            "params": _route_capacity_params(
+                selected_route.id, period_start, period_end
+            ),
+            "result": capacity,
+        }
+        _clear_route_capacity_slots()
+
+    if capacity is not None:
         if capacity.warnings:
             for warning in capacity.warnings:
                 st.warning(warning)
@@ -440,41 +505,48 @@ def _render_route_capacity_check(session, routes: list[Route]) -> None:
             st.info(
                 "В выбранном периоде нет доступного тиража, который можно реально отгрузить по этому маршруту."
             )
-    elif period_start is None or period_end is None:
-        st.info("Выберите дату начала и дату окончания периода.")
-
-    with qty_col:
-        quantity = st.number_input(
-            "Желаемый тираж",
-            min_value=0.0,
-            step=100.0,
-            value=0.0,
-            key="orders_route_capacity_quantity",
-        )
 
     if st.button(
         "Показать свободные слоты отгрузки",
-        disabled=capacity is None or selected_route is None,
+        disabled=selected_route is None or period_start is None or period_end is None,
     ):
-        if (
-            capacity is None
-            or selected_route is None
-            or period_start is None
-            or period_end is None
-        ):
+        if quantity <= 0:
+            st.error("Тираж должен быть больше 0")
+            return
+        if selected_route is None or period_start is None or period_end is None:
             st.error("Выберите период и маршрут.")
             return
-        if quantity <= 0:
-            st.error("Тираж должен быть больше 0.")
+        capacity = _get_current_capacity_result(
+            selected_route.id, period_start, period_end
+        )
+        if capacity is None:
+            st.error("Сначала рассчитайте доступный тираж.")
             return
         if quantity > capacity.max_quantity:
             st.error(
                 "Введённый тираж превышает максимальный доступный тираж для выбранного маршрута и периода."
             )
             return
-        slots = RouteCapacityService(session).find_available_shipment_slots(
-            selected_route.id, quantity, period_start, period_end
+        slots = RouteCapacityService(session).find_available_shipment_slots_for_capacity(
+            capacity, quantity, period_start, period_end
         )
+        st.session_state[ROUTE_CAPACITY_SLOTS_SESSION_KEY] = {
+            "params": (
+                *_route_capacity_params(selected_route.id, period_start, period_end),
+                quantity,
+            ),
+            "slots": slots,
+        }
+    elif (
+        selected_route is not None
+        and period_start is not None
+        and period_end is not None
+    ):
+        slots = _get_current_slots(selected_route.id, period_start, period_end, quantity)
+    else:
+        slots = None
+
+    if slots is not None:
         if not slots:
             st.info(
                 "Для выбранного маршрута и тиража нет свободных слотов отгрузки в выбранном периоде."
