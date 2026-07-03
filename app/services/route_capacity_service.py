@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.constants import ORDER_STATUS_NEW
 from app.db.models import PlannedOperationDay, Route, RouteOperation, WorkCenter
 from app.planning.capacity_calendar import CapacityCalendar, CapacityReservation
+from app.planning.capacity_units import total_capacity_between
 from app.planning.entities import PlanningOrder, PlanningRouteOperation
 from app.planning.planner import PlanningEngine
 from app.services.planning_mapper import map_work_center_to_planning
@@ -85,8 +86,6 @@ class RouteCapacityService:
         details: list[RouteCapacityDetail] = []
         warnings: list[str] = []
         limits: list[tuple[float, str]] = []
-        days = (period_end - period_start).days + 1
-
         if not route.operations:
             warnings.append("В маршруте нет операций.")
 
@@ -101,7 +100,11 @@ class RouteCapacityService:
                 warning = "Норма часов на 1000 должна быть больше 0."
 
             available_hours = (
-                (work_center.available_hours_per_day * days) if work_center else 0.0
+                total_capacity_between(
+                    work_center.available_hours_per_day, period_start, period_end
+                )
+                if work_center
+                else 0.0
             )
             occupied_hours = occupied.get(operation.work_center_id, 0.0)
             free_hours = max(0.0, available_hours - occupied_hours)

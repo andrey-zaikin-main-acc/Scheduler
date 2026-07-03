@@ -32,7 +32,7 @@ def session() -> Session:
 
 
 def create_route(
-    session: Session, *, print_hours=8, glue_hours=4
+    session: Session, *, print_hours=248, glue_hours=124
 ) -> tuple[Route, WorkCenter, WorkCenter, RouteOperation, RouteOperation]:
     print_center = WorkCenter(name="Печать", available_hours_per_day=print_hours)
     glue_center = WorkCenter(name="Склейка", available_hours_per_day=glue_hours)
@@ -101,7 +101,7 @@ def add_planned_day(
 
 
 def test_route_capacity_is_minimum_across_operations(session: Session) -> None:
-    route, *_ = create_route(session, print_hours=10, glue_hours=4)
+    route, *_ = create_route(session, print_hours=310, glue_hours=124)
 
     result = RouteCapacityService(session).calculate_route_capacity(
         route.id, date(2026, 7, 1), date(2026, 7, 1)
@@ -115,7 +115,7 @@ def test_route_capacity_is_minimum_across_operations(session: Session) -> None:
 
 def test_planned_operation_days_reduce_available_quantity(session: Session) -> None:
     route, print_center, _, print_operation, _ = create_route(
-        session, print_hours=8, glue_hours=16
+        session, print_hours=248, glue_hours=496
     )
     add_planned_day(
         session,
@@ -138,7 +138,7 @@ def test_planned_operation_days_reduce_available_quantity(session: Session) -> N
 
 def test_capacity_is_zero_when_no_free_hours(session: Session) -> None:
     route, print_center, _, print_operation, _ = create_route(
-        session, print_hours=8, glue_hours=16
+        session, print_hours=248, glue_hours=496
     )
     add_planned_day(
         session,
@@ -167,7 +167,7 @@ def test_quantity_above_capacity_does_not_calculate_slots(session: Session) -> N
 
 
 def test_slot_search_does_not_create_orders_or_saved_plan(session: Session) -> None:
-    route, *_ = create_route(session, print_hours=8, glue_hours=8)
+    route, *_ = create_route(session, print_hours=248, glue_hours=248)
     before_orders = session.scalar(select(func.count(Order.id)))
     before_planned_operations = session.scalar(select(func.count(PlannedOperation.id)))
     before_days = session.scalar(select(func.count(PlannedOperationDay.id)))
@@ -188,7 +188,7 @@ def test_slot_search_does_not_create_orders_or_saved_plan(session: Session) -> N
 
 
 def test_slot_search_returns_possible_dates(session: Session) -> None:
-    route, *_ = create_route(session, print_hours=8, glue_hours=8)
+    route, *_ = create_route(session, print_hours=248, glue_hours=248)
 
     slots = RouteCapacityService(session).find_available_shipment_slots(
         route.id, 1000, date(2026, 7, 1), date(2026, 7, 3)
@@ -198,7 +198,7 @@ def test_slot_search_returns_possible_dates(session: Session) -> None:
 
 
 def test_capacity_max_quantity_has_available_shipment_slot(session: Session) -> None:
-    route, *_ = create_route(session, print_hours=8, glue_hours=8)
+    route, *_ = create_route(session, print_hours=248, glue_hours=248)
 
     result = RouteCapacityService(session).calculate_route_capacity(
         route.id, date(2026, 7, 1), date(2026, 7, 3)
@@ -215,9 +215,9 @@ def test_capacity_max_quantity_is_reduced_to_schedulable_limit(
     session: Session,
 ) -> None:
     route, _, glue_center, _, glue_operation = create_route(
-        session, print_hours=10, glue_hours=20
+        session, print_hours=310, glue_hours=620
     )
-    glue_center.available_hours_per_day = 10
+    glue_center.available_hours_per_day = 310
     glue_operation.labor_hours_per_1000 = 4 / 3
     session.commit()
 
@@ -233,7 +233,7 @@ def test_capacity_max_quantity_is_reduced_to_schedulable_limit(
 def test_capacity_smaller_than_max_quantity_has_available_slot(
     session: Session,
 ) -> None:
-    route, *_ = create_route(session, print_hours=8, glue_hours=8)
+    route, *_ = create_route(session, print_hours=248, glue_hours=248)
 
     result = RouteCapacityService(session).calculate_route_capacity(
         route.id, date(2026, 7, 1), date(2026, 7, 3)
@@ -250,7 +250,7 @@ def test_capacity_smaller_than_max_quantity_has_available_slot(
 def test_capacity_is_zero_when_no_positive_quantity_has_slots(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    route, *_ = create_route(session, print_hours=8, glue_hours=8)
+    route, *_ = create_route(session, print_hours=248, glue_hours=248)
 
     monkeypatch.setattr(
         RouteCapacityService,
@@ -269,7 +269,7 @@ def test_capacity_is_zero_when_no_positive_quantity_has_slots(
 
 def test_slot_search_returns_empty_when_dates_do_not_fit(session: Session) -> None:
     route, print_center, glue_center, print_operation, glue_operation = create_route(
-        session, print_hours=8, glue_hours=8
+        session, print_hours=248, glue_hours=248
     )
     for day in [date(2026, 7, 1), date(2026, 7, 2)]:
         add_planned_day(

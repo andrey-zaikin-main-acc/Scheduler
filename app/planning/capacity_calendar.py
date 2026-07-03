@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
+from app.planning.capacity_units import daily_capacity_from_monthly
 from app.planning.entities import PlanningWorkCenter, ScheduledOperationDay
 
 NORMALIZED_DAY_START = time.min
@@ -37,9 +38,15 @@ class CapacityCalendar:
             defaultdict(list)
         )
 
-    def available_hours(self, work_center_id: int) -> float:
-        """Return daily available hours for a work center."""
-        return self._get_work_center(work_center_id).available_hours_per_day
+    def available_hours(self, work_center_id: int, day: date) -> float:
+        """Return daily available capacity for a work center on a calendar date.
+
+        The persisted ``available_hours_per_day`` value currently stores the
+        monthly production capacity.  Daily capacity is calculated from the
+        actual number of days in the month of ``day``.
+        """
+        monthly_capacity = self._get_work_center(work_center_id).available_hours_per_day
+        return daily_capacity_from_monthly(monthly_capacity, day)
 
     def workday_bounds(
         self, work_center_id: int, day: date
@@ -64,7 +71,7 @@ class CapacityCalendar:
         """Return free hours for a work center on a date."""
         return max(
             0.0,
-            self.available_hours(work_center_id)
+            self.available_hours(work_center_id, day)
             - self.occupied_hours(work_center_id, day),
         )
 
@@ -345,7 +352,7 @@ class CapacityCalendar:
     def _hours_to_normalized_delta(
         self, work_center_id: int, day: date, hours: float
     ) -> timedelta:
-        capacity = self.available_hours(work_center_id)
+        capacity = self.available_hours(work_center_id, day)
         if hours <= 0:
             return timedelta(0)
         start, end = self.workday_bounds(work_center_id, day)
@@ -365,7 +372,10 @@ class CapacityCalendar:
         normalized_seconds = (day_end - day_start).total_seconds()
         used_seconds = (bounded_end - bounded_start).total_seconds()
         return round(
-            self.available_hours(work_center_id) * used_seconds / normalized_seconds, 9
+            self.available_hours(work_center_id, start.date())
+            * used_seconds
+            / normalized_seconds,
+            9,
         )
 
     def _get_work_center(self, work_center_id: int) -> PlanningWorkCenter:

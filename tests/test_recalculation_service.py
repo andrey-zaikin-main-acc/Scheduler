@@ -54,7 +54,7 @@ def create_route_with_operation(
 
 def test_recalculation_service_persists_successful_plan(session: Session) -> None:
     route = create_route_with_operation(
-        session, hours_per_day=8, labor_hours_per_1000=8
+        session, hours_per_day=248, labor_hours_per_1000=8
     )
     order = Order(
         order_number="R-001",
@@ -107,12 +107,12 @@ def test_recalculation_service_persists_conflict(session: Session) -> None:
     assert session.query(PlannedOperation).count() == 0
     assert order.status == ORDER_STATUS_CONFLICT
     assert conflict.order_id == order.id
-    assert conflict.deficit_hours == 2
+    assert conflict.deficit_hours == pytest.approx(3 - 1 / 31)
 
 
 def test_recalculation_service_clears_previous_plan(session: Session) -> None:
     route = create_route_with_operation(
-        session, hours_per_day=8, labor_hours_per_1000=8
+        session, hours_per_day=248, labor_hours_per_1000=8
     )
     order = Order(
         order_number="R-003",
@@ -136,7 +136,7 @@ def test_recalculation_service_clears_previous_plan(session: Session) -> None:
 
 def test_recalculation_service_persists_plan_changes(session: Session) -> None:
     route = create_route_with_operation(
-        session, hours_per_day=8, labor_hours_per_1000=8
+        session, hours_per_day=248, labor_hours_per_1000=8
     )
     order = Order(
         order_number="R-004",
@@ -164,7 +164,7 @@ def test_recalculation_persists_high_capacity_order_within_shipment_date(
     session: Session,
 ) -> None:
     route = create_route_with_operation(
-        session, hours_per_day=30, labor_hours_per_1000=20
+        session, hours_per_day=930, labor_hours_per_1000=20
     )
     order = Order(
         order_number="R-005",
@@ -193,7 +193,7 @@ def test_recalculation_recomputes_start_and_status_after_shipment_date_change(
     session: Session,
 ) -> None:
     route = create_route_with_operation(
-        session, hours_per_day=8, labor_hours_per_1000=8
+        session, hours_per_day=248, labor_hours_per_1000=8
     )
     order = Order(
         order_number="R-006",
@@ -226,7 +226,7 @@ def test_order_update_clears_stale_calculated_start_date_before_recalculation(
     session: Session,
 ) -> None:
     route = create_route_with_operation(
-        session, hours_per_day=8, labor_hours_per_1000=8
+        session, hours_per_day=248, labor_hours_per_1000=8
     )
     order = Order(
         order_number="R-007",

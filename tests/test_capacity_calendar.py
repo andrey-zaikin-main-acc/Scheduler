@@ -8,7 +8,7 @@ from app.planning.entities import PlanningWorkCenter
 
 def test_capacity_calendar_reserves_and_reports_free_hours() -> None:
     calendar = CapacityCalendar(
-        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)]
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248)]
     )
     day = date(2026, 7, 10)
 
@@ -20,7 +20,7 @@ def test_capacity_calendar_reserves_and_reports_free_hours() -> None:
 
 def test_capacity_calendar_rejects_overbooking() -> None:
     calendar = CapacityCalendar(
-        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)]
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248)]
     )
     day = date(2026, 7, 10)
 
@@ -32,7 +32,7 @@ def test_capacity_calendar_rejects_overbooking() -> None:
 
 def test_capacity_calendar_returns_blocking_orders() -> None:
     calendar = CapacityCalendar(
-        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)]
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248)]
     )
     calendar.reserve(order_id=101, work_center_id=1, day=date(2026, 7, 9), hours=8)
     calendar.reserve(order_id=102, work_center_id=1, day=date(2026, 7, 10), hours=4)
@@ -46,7 +46,7 @@ def test_capacity_calendar_returns_blocking_orders() -> None:
 
 def test_capacity_calendar_assigns_non_overlapping_latest_intraday_intervals() -> None:
     calendar = CapacityCalendar(
-        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)]
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248)]
     )
     day = date(2026, 7, 10)
 
@@ -67,13 +67,13 @@ def test_capacity_calendar_uses_normalized_calendar_day_bounds() -> None:
             PlanningWorkCenter(
                 id=1,
                 name="A",
-                available_hours_per_day=8,
+                available_hours_per_day=248,
                 workday_start_time=time(hour=8),
             ),
             PlanningWorkCenter(
                 id=2,
                 name="B",
-                available_hours_per_day=6,
+                available_hours_per_day=186,
                 workday_start_time=time(hour=10),
             ),
         ]
@@ -100,7 +100,7 @@ def test_capacity_calendar_carries_remainder_to_next_calendar_date() -> None:
             PlanningWorkCenter(
                 id=1,
                 name="B",
-                available_hours_per_day=6,
+                available_hours_per_day=186,
                 workday_start_time=time(hour=10),
             ),
         ]
@@ -125,7 +125,7 @@ def test_capacity_calendar_carries_remainder_to_next_calendar_date() -> None:
 
 def test_capacity_calendar_defaults_to_normalized_calendar_date() -> None:
     calendar = CapacityCalendar(
-        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)]
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248)]
     )
 
     start, end = calendar.workday_bounds(1, date(2026, 7, 10))
@@ -144,10 +144,37 @@ def test_large_available_hours_does_not_create_month_long_work_interval() -> Non
         order_id=101,
         work_center_id=1,
         day=date(2026, 7, 10),
-        hours=3780,
+        hours=120,
     )
 
     assert start.date() == date(2026, 7, 10)
     assert end.date() == date(2026, 7, 10)
     assert placement.start_datetime.date() == date(2026, 7, 10)
     assert placement.end_datetime.date() == date(2026, 7, 10)
+
+
+def test_monthly_capacity_3300_in_july_gives_daily_capacity_by_31_days() -> None:
+    calendar = CapacityCalendar(
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=3300)]
+    )
+
+    assert calendar.available_hours(1, date(2026, 7, 10)) == pytest.approx(3300 / 31)
+
+
+def test_daily_capacity_is_recalculated_when_crossing_july_to_august() -> None:
+    calendar = CapacityCalendar(
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=3300)]
+    )
+
+    placements = calendar.reserve_contiguous_forward(
+        order_id=101,
+        work_center_id=1,
+        start_datetime=datetime(2026, 7, 31),
+        hours=200,
+    )
+
+    assert placements[0].date == date(2026, 7, 31)
+    assert placements[0].hours == pytest.approx(3300 / 31)
+    assert placements[1].date == date(2026, 8, 1)
+    assert placements[1].hours == pytest.approx(200 - 3300 / 31)
+    assert calendar.available_hours(1, date(2026, 8, 1)) == pytest.approx(3300 / 31)
