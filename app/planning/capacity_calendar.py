@@ -1,7 +1,7 @@
 """In-memory capacity calendar for pure planning calculations."""
 
 from collections import defaultdict
-from copy import deepcopy
+from bisect import insort
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
@@ -37,6 +37,8 @@ class CapacityCalendar:
         self._reservations: dict[tuple[int, date], list[CapacityReservation]] = (
             defaultdict(list)
         )
+        self._daily_capacity_cache: dict[tuple[int, date], float] = {}
+        self._history: list[tuple[tuple[int, date], float, CapacityReservation]] = []
 
     def available_hours(self, work_center_id: int, day: date) -> float:
         """Return daily available capacity for a work center on a calendar date.
@@ -45,8 +47,14 @@ class CapacityCalendar:
         monthly production capacity.  Daily capacity is calculated from the
         actual number of days in the month of ``day``.
         """
+        key = (work_center_id, day)
+        cached = self._daily_capacity_cache.get(key)
+        if cached is not None:
+            return cached
         monthly_capacity = self._get_work_center(work_center_id).available_hours_per_day
-        return daily_capacity_from_monthly(monthly_capacity, day)
+        capacity = daily_capacity_from_monthly(monthly_capacity, day)
+        self._daily_capacity_cache[key] = capacity
+        return capacity
 
     def workday_bounds(
         self, work_center_id: int, day: date
@@ -105,8 +113,10 @@ class CapacityCalendar:
             start_datetime=start_datetime,
             end_datetime=end_datetime,
         )
-        self._reservations[key].append(reservation)
-        self._reservations[key].sort(key=lambda item: item.start_datetime)
+        insort(
+            self._reservations[key], reservation, key=lambda item: item.start_datetime
+        )
+        self._history.append((key, hours, reservation))
         return ScheduledOperationDay(
             work_center_id=work_center_id,
             date=day,
@@ -168,8 +178,12 @@ class CapacityCalendar:
                 start_datetime=cursor,
                 end_datetime=end_datetime,
             )
-            self._reservations[key].append(reservation)
-            self._reservations[key].sort(key=lambda item: item.start_datetime)
+            insort(
+                self._reservations[key],
+                reservation,
+                key=lambda item: item.start_datetime,
+            )
+            self._history.append((key, used_hours, reservation))
             placements.append(
                 ScheduledOperationDay(
                     work_center_id=work_center_id,
@@ -200,11 +214,7 @@ class CapacityCalendar:
         if cursor_end <= work_start:
             return 0.0
         free = 0.0
-        for reservation in sorted(
-            self._reservations.get((work_center_id, day), []),
-            key=lambda r: r.start_datetime,
-            reverse=True,
-        ):
+        for reservation in reversed(self._reservations.get((work_center_id, day), ())):
             if reservation.end_datetime <= cursor_end:
                 free += self._capacity_between_datetimes(
                     work_center_id, reservation.end_datetime, cursor_end
@@ -242,25 +252,22 @@ class CapacityCalendar:
             current = current.fromordinal(current.toordinal() + 1)
         return tuple(sorted(order_ids))
 
-    def snapshot(
-        self,
-    ) -> tuple[
-        dict[tuple[int, date], float], dict[tuple[int, date], list[CapacityReservation]]
-    ]:
-        """Return a restorable snapshot of occupied hours and reservations."""
-        return dict(self._occupied_hours), deepcopy(dict(self._reservations))
+    def snapshot(self) -> int:
+        """Return a lightweight restorable marker for appended reservation history."""
+        return len(self._history)
 
-    def restore(
-        self,
-        snapshot: tuple[
-            dict[tuple[int, date], float],
-            dict[tuple[int, date], list[CapacityReservation]],
-        ],
-    ) -> None:
-        """Restore occupied hours and reservations from a snapshot."""
-        occupied_hours, reservations = snapshot
-        self._occupied_hours = defaultdict(float, occupied_hours)
-        self._reservations = defaultdict(list, reservations)
+    def restore(self, snapshot: int) -> None:
+        """Rollback reservations appended after ``snapshot`` without copying all data."""
+        while len(self._history) > snapshot:
+            key, hours, reservation = self._history.pop()
+            self._occupied_hours[key] -= hours
+            if abs(self._occupied_hours[key]) <= 1e-9:
+                self._occupied_hours.pop(key, None)
+            reservations = self._reservations.get(key)
+            if reservations is not None:
+                reservations.remove(reservation)
+                if not reservations:
+                    self._reservations.pop(key, None)
 
     def _find_latest_free_interval(
         self,
@@ -276,11 +283,7 @@ class CapacityCalendar:
             if latest_end_datetime is not None
             else work_end
         )
-        for reservation in sorted(
-            self._reservations.get((work_center_id, day), []),
-            key=lambda r: r.start_datetime,
-            reverse=True,
-        ):
+        for reservation in reversed(self._reservations.get((work_center_id, day), ())):
             if cursor_end - reservation.end_datetime >= duration:
                 return cursor_end - duration, cursor_end
             cursor_end = min(cursor_end, reservation.start_datetime)
@@ -305,10 +308,7 @@ class CapacityCalendar:
         while remaining > 1e-9:
             work_start, work_end = self.workday_bounds(work_center_id, cursor.date())
             cursor = max(cursor, work_start)
-            reservations = sorted(
-                self._reservations.get((work_center_id, cursor.date()), []),
-                key=lambda r: r.start_datetime,
-            )
+            reservations = self._reservations.get((work_center_id, cursor.date()), ())
             next_busy_start = work_end
             for reservation in reservations:
                 if reservation.start_datetime < cursor < reservation.end_datetime:
@@ -336,10 +336,7 @@ class CapacityCalendar:
     ) -> datetime:
         cursor = self._normalize_to_work_time(work_center_id, value)
         _, work_end = self.workday_bounds(work_center_id, cursor.date())
-        for reservation in sorted(
-            self._reservations.get((work_center_id, cursor.date()), []),
-            key=lambda r: r.start_datetime,
-        ):
+        for reservation in self._reservations.get((work_center_id, cursor.date()), ()):
             if reservation.end_datetime > cursor:
                 return self._normalize_to_work_time(
                     work_center_id, reservation.end_datetime

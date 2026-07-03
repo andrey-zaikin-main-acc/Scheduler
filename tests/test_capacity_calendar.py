@@ -178,3 +178,34 @@ def test_daily_capacity_is_recalculated_when_crossing_july_to_august() -> None:
     assert placements[1].date == date(2026, 8, 1)
     assert placements[1].hours == pytest.approx(200 - 3300 / 31)
     assert calendar.available_hours(1, date(2026, 8, 1)) == pytest.approx(3300 / 31)
+
+
+def test_capacity_calendar_restore_removes_only_failed_attempt_reservations() -> None:
+    calendar = CapacityCalendar(
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=744)]
+    )
+    original = calendar.reserve(
+        order_id=101,
+        work_center_id=1,
+        day=date(2026, 7, 10),
+        hours=4,
+    )
+    snapshot = calendar.snapshot()
+
+    trial = calendar.reserve(
+        order_id=202,
+        work_center_id=1,
+        day=date(2026, 7, 10),
+        hours=2,
+        latest_end_datetime=original.start_datetime,
+    )
+    assert trial.end_datetime <= original.start_datetime
+
+    calendar.restore(snapshot)
+
+    assert calendar.occupied_hours(1, date(2026, 7, 10)) == pytest.approx(4)
+    assert calendar.blocking_order_ids(
+        work_center_id=1,
+        start_date=date(2026, 7, 10),
+        end_date=date(2026, 7, 10),
+    ) == (101,)
