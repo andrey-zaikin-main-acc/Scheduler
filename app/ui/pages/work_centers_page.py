@@ -15,7 +15,7 @@ EDITOR_COLUMNS = [
     "Выбран",
     "ID",
     "Название",
-    "Доступные часы в день",
+    "Доступное время в месяц",
     "Время начала рабочего дня",
     "Активен",
 ]
@@ -83,8 +83,8 @@ def render_work_centers_page() -> None:
                     "Выбран", help="Отметьте один участок для удаления."
                 ),
                 "ID": st.column_config.NumberColumn("ID", disabled=True),
-                "Доступные часы в день": st.column_config.NumberColumn(
-                    "Доступные часы в день", min_value=0.01, step=0.5
+                "Доступное время в месяц": st.column_config.NumberColumn(
+                    "Доступное время в месяц", min_value=0.01, step=0.5
                 ),
                 "Активен": st.column_config.CheckboxColumn("Активен"),
             },
@@ -105,7 +105,7 @@ def build_work_center_editor_rows(
                 "Выбран": False,
                 "ID": None,
                 "Название": "",
-                "Доступные часы в день": 0.0,
+                "Доступное время в месяц": 0.0,
                 "Время начала рабочего дня": "09:00",
                 "Активен": True,
             }
@@ -118,14 +118,14 @@ def validate_work_center_row(
 ) -> list[str]:
     errors: list[str] = []
     name = str(row.get("Название") or "").strip()
-    hours = _parse_float(row.get("Доступные часы в день"))
+    hours = _parse_float(row.get("Доступное время в месяц"))
     if not name:
         errors.append("Название участка обязательно.")
     duplicate_id = existing_names.get(name)
     if duplicate_id is not None and duplicate_id != current_id:
         errors.append("Участок с таким названием уже существует.")
     if hours is None or hours <= 0:
-        errors.append("Доступные часы в день должны быть больше 0.")
+        errors.append("Доступное время в месяц должно быть больше 0.")
     if _parse_time(row.get("Время начала рабочего дня")) is None:
         errors.append("Время начала рабочего дня должно быть в формате HH:MM.")
     if not isinstance(row.get("Активен"), bool):
@@ -189,7 +189,7 @@ def _process_editor_changes(
 def _row_to_payload(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": str(row["Название"]).strip(),
-        "available_hours_per_day": float(row["Доступные часы в день"]),
+        "available_hours_per_day": float(row["Доступное время в месяц"]),
         "workday_start_time": _parse_time(row["Время начала рабочего дня"])
         or time(hour=9),
         "is_active": bool(row["Активен"]),
@@ -200,7 +200,7 @@ def _row_changed(row: dict[str, Any], item: WorkCenter) -> bool:
     return any(
         [
             str(row.get("Название") or "").strip() != item.name,
-            _parse_float(row.get("Доступные часы в день"))
+            _parse_float(row.get("Доступное время в месяц"))
             != float(item.available_hours_per_day),
             _parse_time(row.get("Время начала рабочего дня"))
             != item.workday_start_time,
@@ -211,7 +211,7 @@ def _row_changed(row: dict[str, Any], item: WorkCenter) -> bool:
 
 def _is_blank_draft_row(row: dict[str, Any]) -> bool:
     return not str(row.get("Название") or "").strip() and not _parse_float(
-        row.get("Доступные часы в день")
+        row.get("Доступное время в месяц")
     )
 
 

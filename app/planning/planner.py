@@ -237,7 +237,8 @@ class PlanningEngine:
                     batch_quantity * route_operation.labor_hours_per_1000 / 1000
                 )
                 daily_capacity = self.capacity_calendar.available_hours(
-                    route_operation.work_center_id
+                    route_operation.work_center_id,
+                    prepared_order.order.shipment_date,
                 )
                 batch_finish = batch_start + (
                     batch_hours / daily_capacity * NORMALIZED_DAY_HOURS

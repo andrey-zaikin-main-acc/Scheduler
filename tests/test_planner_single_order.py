@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from app.constants import ORDER_STATUS_DONE, ORDER_STATUS_NEW
 from app.planning.capacity_calendar import CapacityCalendar
 from app.planning.entities import (
@@ -13,8 +15,8 @@ from app.planning.planner import PlanningEngine
 def test_planning_engine_plans_single_order_backwards() -> None:
     calendar = CapacityCalendar(
         [
-            PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8),
-            PlanningWorkCenter(id=2, name="Высечка", available_hours_per_day=8),
+            PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248),
+            PlanningWorkCenter(id=2, name="Высечка", available_hours_per_day=248),
         ]
     )
     engine = PlanningEngine(
@@ -52,7 +54,7 @@ def test_planning_engine_plans_single_order_backwards() -> None:
 
 def test_planning_engine_returns_conflict_for_non_plannable_status() -> None:
     calendar = CapacityCalendar(
-        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)]
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248)]
     )
     engine = PlanningEngine(
         capacity_calendar=calendar, planning_start_date=date(2026, 7, 1)
@@ -94,7 +96,7 @@ def test_planning_engine_returns_conflict_when_capacity_window_is_insufficient()
 
     assert not result.is_success
     assert result.conflict is not None
-    assert result.conflict.deficit_hours == 2
+    assert result.conflict.deficit_hours == pytest.approx(3 - 1 / 31)
     assert result.conflict.shipment_date == date(2026, 7, 10)
     assert "партии или операции" in result.conflict.reason
 
@@ -104,8 +106,8 @@ def test_planning_engine_uses_min_transfer_quantity_batches_with_final_remainder
 ):
     calendar = CapacityCalendar(
         [
-            PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8),
-            PlanningWorkCenter(id=2, name="Высечка", available_hours_per_day=8),
+            PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248),
+            PlanningWorkCenter(id=2, name="Высечка", available_hours_per_day=248),
         ]
     )
     engine = PlanningEngine(
@@ -152,8 +154,8 @@ def test_single_order_is_compacted_to_shipment_datetime_without_capacity_competi
 ):
     calendar = CapacityCalendar(
         [
-            PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8),
-            PlanningWorkCenter(id=2, name="Высечка", available_hours_per_day=8),
+            PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248),
+            PlanningWorkCenter(id=2, name="Высечка", available_hours_per_day=248),
         ]
     )
     engine = PlanningEngine(
@@ -206,8 +208,8 @@ def test_previous_operation_finishes_before_exact_dependent_batch_start_datetime
 ):
     calendar = CapacityCalendar(
         [
-            PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8),
-            PlanningWorkCenter(id=2, name="Высечка", available_hours_per_day=8),
+            PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248),
+            PlanningWorkCenter(id=2, name="Высечка", available_hours_per_day=248),
         ]
     )
     engine = PlanningEngine(
@@ -264,8 +266,8 @@ def test_previous_operation_finishes_before_exact_dependent_batch_start_datetime
 def test_middle_operation_waits_for_its_own_minimum_batch_quantity() -> None:
     calendar = CapacityCalendar(
         [
-            PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8),
-            PlanningWorkCenter(id=2, name="Высечка", available_hours_per_day=8),
+            PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248),
+            PlanningWorkCenter(id=2, name="Высечка", available_hours_per_day=248),
         ]
     )
     engine = PlanningEngine(
@@ -354,7 +356,7 @@ def test_conflict_does_not_move_shipment_date_when_capacity_is_insufficient() ->
 
 def test_single_order_without_ideal_start_sorting_stays_compact() -> None:
     calendar = CapacityCalendar(
-        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)]
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248)]
     )
     engine = PlanningEngine(
         capacity_calendar=calendar, planning_start_date=date(2026, 7, 1)
@@ -381,7 +383,7 @@ def test_successfully_planned_order_starts_and_finishes_no_later_than_shipment_d
     None
 ):
     calendar = CapacityCalendar(
-        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)]
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248)]
     )
     engine = PlanningEngine(
         capacity_calendar=calendar, planning_start_date=date(2026, 7, 1)
@@ -418,7 +420,7 @@ def test_daily_capacity_larger_than_24_can_still_fit_in_shipment_calendar_date()
     None
 ):
     calendar = CapacityCalendar(
-        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=30)]
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=930)]
     )
     engine = PlanningEngine(
         capacity_calendar=calendar, planning_start_date=date(2026, 7, 10)
@@ -446,7 +448,7 @@ def test_daily_capacity_larger_than_24_can_still_fit_in_shipment_calendar_date()
     )
 
 
-def test_high_daily_capacity_can_finish_half_day_need_on_shipment_date() -> None:
+def test_high_monthly_capacity_can_finish_partial_day_need_on_shipment_date() -> None:
     calendar = CapacityCalendar(
         [PlanningWorkCenter(id=1, name="Копакинг", available_hours_per_day=7560)]
     )
@@ -462,7 +464,7 @@ def test_high_daily_capacity_can_finish_half_day_need_on_shipment_date() -> None
             sequence_number=1,
             work_center_id=1,
             work_center_name="Копакинг",
-            labor_hours_per_1000=3780,
+            labor_hours_per_1000=120,
         ),
     )
 
@@ -474,3 +476,32 @@ def test_high_daily_capacity_can_finish_half_day_need_on_shipment_date() -> None
         max(day.end_datetime for op in result.operations for day in op.days).date()
         == order.shipment_date
     )
+
+
+def test_insufficient_monthly_capacity_before_shipment_date_creates_conflict() -> None:
+    calendar = CapacityCalendar(
+        [PlanningWorkCenter(id=1, name="Копакинг", available_hours_per_day=31)]
+    )
+    engine = PlanningEngine(
+        capacity_calendar=calendar, planning_start_date=date(2026, 7, 10)
+    )
+    order = PlanningOrder(
+        id=209, quantity=1000, shipment_date=date(2026, 7, 10), status=ORDER_STATUS_NEW
+    )
+    route_operations = (
+        PlanningRouteOperation(
+            id=1,
+            sequence_number=1,
+            work_center_id=1,
+            work_center_name="Копакинг",
+            labor_hours_per_1000=2,
+        ),
+    )
+
+    result = engine.plan_order(order, route_operations)
+
+    assert not result.is_success
+    assert result.calculated_start_date is None
+    assert result.conflict is not None
+    assert result.conflict.work_center_id == 1
+    assert result.conflict.deficit_hours == pytest.approx(1)

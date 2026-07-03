@@ -11,7 +11,7 @@ from app.planning.entities import (
 
 def test_schedule_operation_backward_splits_hours_across_days() -> None:
     calendar = CapacityCalendar(
-        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)]
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248)]
     )
 
     result = schedule_operation_backward(
@@ -38,7 +38,7 @@ def test_schedule_operation_backward_splits_hours_across_days() -> None:
 
 def test_schedule_operation_backward_uses_remaining_capacity() -> None:
     calendar = CapacityCalendar(
-        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)]
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248)]
     )
     calendar.reserve(order_id=100, work_center_id=1, day=date(2026, 7, 10), hours=6)
 
@@ -65,7 +65,7 @@ def test_schedule_operation_backward_returns_conflict_when_window_is_too_small()
     None
 ):
     calendar = CapacityCalendar(
-        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=8)]
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248)]
     )
     calendar.reserve(order_id=100, work_center_id=1, day=date(2026, 7, 10), hours=8)
 
@@ -88,7 +88,7 @@ def test_schedule_operation_backward_returns_conflict_when_window_is_too_small()
 
 def test_schedule_operation_backward_uses_calendar_dates_for_aggregate_window() -> None:
     calendar = CapacityCalendar(
-        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=3626.428)]
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=108792.84)]
     )
     calendar.reserve(
         order_id=100,

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.models import PlannedOperationDay, Route, RouteOperation, WorkCenter
+from app.planning.capacity_units import daily_capacity_from_monthly
 
 
 @dataclass(frozen=True)
@@ -55,18 +56,26 @@ class FreeSlotsService:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def get_free_slots(self, *, start_date: date, end_date: date) -> list[dict[str, object]]:
+    def get_free_slots(
+        self, *, start_date: date, end_date: date
+    ) -> list[dict[str, object]]:
         """Return free hours by work center and date for an inclusive period."""
         rows = self._free_slot_rows(start_date=start_date, end_date=end_date)
         return [row.to_dict() for row in rows]
 
-    def get_route_capacities(self, *, start_date: date, end_date: date) -> list[dict[str, object]]:
+    def get_route_capacities(
+        self, *, start_date: date, end_date: date
+    ) -> list[dict[str, object]]:
         """Return approximate possible quantities by route for an inclusive period."""
-        free_hours_by_work_center = self._total_free_hours_by_work_center(start_date=start_date, end_date=end_date)
+        free_hours_by_work_center = self._total_free_hours_by_work_center(
+            start_date=start_date, end_date=end_date
+        )
         routes = self.session.scalars(
             select(Route)
             .where(Route.is_active.is_(True))
-            .options(selectinload(Route.operations).selectinload(RouteOperation.work_center))
+            .options(
+                selectinload(Route.operations).selectinload(RouteOperation.work_center)
+            )
             .order_by(Route.name)
         ).all()
 
@@ -76,13 +85,21 @@ class FreeSlotsService:
             for operation in route.operations:
                 if operation.labor_hours_per_1000 <= 0:
                     continue
-                free_hours = free_hours_by_work_center.get(operation.work_center_id, 0.0)
+                free_hours = free_hours_by_work_center.get(
+                    operation.work_center_id, 0.0
+                )
                 possible_quantity = free_hours * 1000 / operation.labor_hours_per_1000
-                work_center_name = operation.work_center.name if operation.work_center else str(operation.work_center_id)
+                work_center_name = (
+                    operation.work_center.name
+                    if operation.work_center
+                    else str(operation.work_center_id)
+                )
                 operation_limits.append((possible_quantity, work_center_name))
 
             if operation_limits:
-                possible_quantity, bottleneck = min(operation_limits, key=lambda item: item[0])
+                possible_quantity, bottleneck = min(
+                    operation_limits, key=lambda item: item[0]
+                )
             else:
                 possible_quantity, bottleneck = 0.0, None
             rows.append(
@@ -97,15 +114,21 @@ class FreeSlotsService:
 
     def _free_slot_rows(self, *, start_date: date, end_date: date) -> list[FreeSlotRow]:
         work_centers = self.session.scalars(
-            select(WorkCenter).where(WorkCenter.is_active.is_(True)).order_by(WorkCenter.name)
+            select(WorkCenter)
+            .where(WorkCenter.is_active.is_(True))
+            .order_by(WorkCenter.name)
         ).all()
-        occupied_hours = self._occupied_hours_by_work_center_and_date(start_date=start_date, end_date=end_date)
+        occupied_hours = self._occupied_hours_by_work_center_and_date(
+            start_date=start_date, end_date=end_date
+        )
 
         rows: list[FreeSlotRow] = []
         for current_date in _date_range(start_date, end_date):
             for work_center in work_centers:
                 occupied = occupied_hours.get((work_center.id, current_date), 0.0)
-                available = work_center.available_hours_per_day
+                available = daily_capacity_from_monthly(
+                    work_center.available_hours_per_day, current_date
+                )
                 rows.append(
                     FreeSlotRow(
                         work_center_id=work_center.id,
@@ -118,13 +141,19 @@ class FreeSlotsService:
                 )
         return rows
 
-    def _total_free_hours_by_work_center(self, *, start_date: date, end_date: date) -> dict[int, float]:
+    def _total_free_hours_by_work_center(
+        self, *, start_date: date, end_date: date
+    ) -> dict[int, float]:
         totals: dict[int, float] = {}
         for row in self._free_slot_rows(start_date=start_date, end_date=end_date):
-            totals[row.work_center_id] = totals.get(row.work_center_id, 0.0) + row.free_hours
+            totals[row.work_center_id] = (
+                totals.get(row.work_center_id, 0.0) + row.free_hours
+            )
         return totals
 
-    def _occupied_hours_by_work_center_and_date(self, *, start_date: date, end_date: date) -> dict[tuple[int, date], float]:
+    def _occupied_hours_by_work_center_and_date(
+        self, *, start_date: date, end_date: date
+    ) -> dict[tuple[int, date], float]:
         planned_days = self.session.scalars(
             select(PlannedOperationDay).where(
                 PlannedOperationDay.date >= start_date,

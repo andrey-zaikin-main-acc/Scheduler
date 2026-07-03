@@ -8,7 +8,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.constants import ORDER_STATUS_NEW, ORDER_STATUS_PLANNED
 from app.db.database import Base
-from app.db.models import Order, PlannedOperation, PlannedOperationDay, Route, RouteOperation, WorkCenter
+from app.db.models import (
+    Order,
+    PlannedOperation,
+    PlannedOperationDay,
+    Route,
+    RouteOperation,
+    WorkCenter,
+)
 from app.services.free_slots_service import FreeSlotsService
 
 
@@ -16,14 +23,16 @@ from app.services.free_slots_service import FreeSlotsService
 def session() -> Session:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    session_factory = sessionmaker(
+        bind=engine, autoflush=False, autocommit=False, expire_on_commit=False
+    )
     with session_factory() as session:
         yield session
 
 
 def create_route_plan_fixture(session: Session) -> None:
-    print_center = WorkCenter(name="Печать", available_hours_per_day=8)
-    glue_center = WorkCenter(name="Склейка", available_hours_per_day=16)
+    print_center = WorkCenter(name="Печать", available_hours_per_day=248)
+    glue_center = WorkCenter(name="Склейка", available_hours_per_day=496)
     route = Route(name="Маршрут A")
     session.add_all([print_center, glue_center, route])
     session.flush()
