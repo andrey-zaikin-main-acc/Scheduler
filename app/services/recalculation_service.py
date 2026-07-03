@@ -3,14 +3,23 @@
 from dataclasses import dataclass
 from datetime import date
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
 
 from app.constants import (
     ORDER_STATUS_CONFLICT,
     ORDER_STATUS_PLANNED,
     PLANNABLE_ORDER_STATUSES,
 )
-from app.db.models import Order, PlanChange, PlannedOperation, RecalculationRun, utc_now
+from app.db.models import (
+    Order,
+    PlanChange,
+    PlannedOperation,
+    RecalculationRun,
+    Route,
+    RouteOperation,
+    utc_now,
+)
 from app.planning.capacity_calendar import CapacityCalendar
 from app.planning.entities import PlannedOrderResult, PlanningConflict
 from app.planning.order_preparation import (
@@ -79,7 +88,8 @@ class RecalculationService:
             capacity_calendar, planning_start_date=self.planning_start_date
         )
 
-        prepared_orders, invalid_results = self._prepare_orders()
+        orders_by_id: dict[int, Order] = {}
+        prepared_orders, invalid_results = self._prepare_orders(orders_by_id)
         sorted_orders = sort_prepared_orders(prepared_orders)
 
         planned_order_count = 0
@@ -88,13 +98,15 @@ class RecalculationService:
         conflict_count = 0
 
         for invalid_result in invalid_results:
-            self._persist_conflict_result(invalid_result)
+            self._persist_conflict_result(
+                invalid_result, orders_by_id.get(invalid_result.order_id)
+            )
             conflicted_order_count += 1
             conflict_count += 1
 
         for prepared_order in sorted_orders:
             result = planning_engine.plan_prepared_order(prepared_order)
-            order = self.orders_repository.get_order(prepared_order.order.id)
+            order = orders_by_id.get(prepared_order.order.id)
             if order is None:
                 continue
 
@@ -105,11 +117,11 @@ class RecalculationService:
                     planned_order_count += 1
                     planned_operation_count += len(guarded_result.operations)
                 else:
-                    self._persist_conflict_result(guarded_result)
+                    self._persist_conflict_result(guarded_result, order)
                     conflicted_order_count += 1
                     conflict_count += 1
             else:
-                self._persist_conflict_result(result)
+                self._persist_conflict_result(result, order)
                 conflicted_order_count += 1
                 conflict_count += 1
 
@@ -133,15 +145,35 @@ class RecalculationService:
             recalculation_run_id=run.id,
         )
 
-    def _prepare_orders(self) -> tuple[list[PreparedOrder], list[PlannedOrderResult]]:
+    def _prepare_orders(
+        self, orders_by_id: dict[int, Order]
+    ) -> tuple[list[PreparedOrder], list[PlannedOrderResult]]:
         prepared_orders: list[PreparedOrder] = []
         invalid_results: list[PlannedOrderResult] = []
 
-        for order in self.orders_repository.list_orders():
-            if order.status not in PLANNABLE_ORDER_STATUSES:
-                continue
+        orders = self.session.scalars(
+            select(Order)
+            .where(Order.status.in_(PLANNABLE_ORDER_STATUSES))
+            .order_by(Order.shipment_date, Order.id)
+        ).all()
+        orders_by_id.update((order.id, order) for order in orders)
+        route_ids = {order.route_id for order in orders}
+        routes_by_id = {
+            route.id: route
+            for route in self.session.scalars(
+                select(Route)
+                .where(Route.id.in_(route_ids))
+                .options(
+                    selectinload(Route.operations).selectinload(
+                        RouteOperation.work_center
+                    )
+                )
+            ).all()
+        }
+
+        for order in orders:
             planning_order = map_order_to_planning(order)
-            route = self.routes_repository.get_route_with_operations(order.route_id)
+            route = routes_by_id.get(order.route_id)
             route_operations = (
                 tuple(
                     map_route_operation_to_planning(operation)
@@ -226,10 +258,13 @@ class RecalculationService:
             )
             self.plan_repository.add_planned_operation_days(days)
 
-    def _persist_conflict_result(self, result: PlannedOrderResult) -> None:
+    def _persist_conflict_result(
+        self, result: PlannedOrderResult, order: Order | None = None
+    ) -> None:
         if result.conflict is None:
             return
-        order = self.orders_repository.get_order(result.order_id)
+        if order is None:
+            order = self.orders_repository.get_order(result.order_id)
         if order is not None:
             order.status = ORDER_STATUS_CONFLICT
             order.calculated_start_date = None

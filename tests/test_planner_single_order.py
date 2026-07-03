@@ -505,3 +505,50 @@ def test_insufficient_monthly_capacity_before_shipment_date_creates_conflict() -
     assert result.conflict is not None
     assert result.conflict.work_center_id == 1
     assert result.conflict.deficit_hours == pytest.approx(1)
+
+
+def test_failed_attempt_rollback_preserves_previous_conflict_blockers() -> None:
+    calendar = CapacityCalendar(
+        [PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=62)]
+    )
+    engine = PlanningEngine(
+        capacity_calendar=calendar, planning_start_date=date(2026, 7, 10)
+    )
+    route_operations = (
+        PlanningRouteOperation(
+            id=1,
+            sequence_number=1,
+            work_center_id=1,
+            work_center_name="Печать",
+            labor_hours_per_1000=1,
+        ),
+    )
+
+    planned = engine.plan_order(
+        PlanningOrder(
+            id=301,
+            quantity=1000,
+            shipment_date=date(2026, 7, 10),
+            status=ORDER_STATUS_NEW,
+        ),
+        route_operations,
+    )
+    conflict = engine.plan_order(
+        PlanningOrder(
+            id=302,
+            quantity=2000,
+            shipment_date=date(2026, 7, 10),
+            status=ORDER_STATUS_NEW,
+        ),
+        route_operations,
+    )
+
+    assert planned.is_success
+    assert not conflict.is_success
+    assert conflict.conflict is not None
+    assert conflict.conflict.blocking_order_ids == (301,)
+    assert calendar.blocking_order_ids(
+        work_center_id=1,
+        start_date=date(2026, 7, 10),
+        end_date=date(2026, 7, 10),
+    ) == (301,)
