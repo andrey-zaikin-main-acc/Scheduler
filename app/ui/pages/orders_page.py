@@ -73,7 +73,7 @@ def render_orders_page() -> None:
     """Render the orders registry with inline editing controls."""
     st.header("Реестр заказов")
     st.caption(
-        "Редактируйте значения прямо в таблице. После изменения заказ автоматически сохраняется, а план пересчитывается."
+        "Редактируйте значения прямо в таблице. Изменения сохраняются только после нажатия кнопки «Сохранить изменения»."
     )
 
     with SessionLocal() as session:
@@ -137,6 +137,8 @@ def render_orders_page() -> None:
             )
             return
 
+        _sync_order_editor_state(rows)
+
         edited_rows = st.data_editor(
             rows,
             key=ORDER_EDITOR_KEY,
@@ -169,7 +171,37 @@ def render_orders_page() -> None:
                 "Конфликт": st.column_config.CheckboxColumn("Конфликт", disabled=True),
             },
         )
-        _process_editor_changes(session, repository, orders, edited_rows, route_by_name)
+        save_requested = st.button(
+            "Сохранить изменения",
+            type="primary",
+            use_container_width=True,
+            disabled=not routes,
+        )
+        _process_editor_changes(
+            session,
+            repository,
+            orders,
+            edited_rows,
+            route_by_name,
+            save_requested=save_requested,
+        )
+
+
+_ORDER_EDITOR_SIGNATURE_SESSION_KEY = "orders_page_editor_signature"
+
+
+def _sync_order_editor_state(rows: list[dict[str, Any]]) -> None:
+    """Reset stale data-editor widget state when database-backed rows change."""
+    signature = _order_editor_rows_signature(rows)
+    if st.session_state.get(_ORDER_EDITOR_SIGNATURE_SESSION_KEY) != signature:
+        st.session_state.pop(ORDER_EDITOR_KEY, None)
+        st.session_state[_ORDER_EDITOR_SIGNATURE_SESSION_KEY] = signature
+
+
+def _order_editor_rows_signature(rows: list[dict[str, Any]]) -> tuple[tuple[Any, ...], ...]:
+    """Return a stable signature for persisted order data, excluding UI selection."""
+    data_columns = [column for column in EDITOR_COLUMNS if column != "Выбран"]
+    return tuple(tuple(row.get(column) for column in data_columns) for row in rows)
 
 
 def build_order_editor_rows(
@@ -241,6 +273,8 @@ def _process_editor_changes(
     orders: list[Order],
     edited_rows: list[dict[str, Any]],
     route_by_name: dict[str, Route],
+    *,
+    save_requested: bool,
 ) -> None:
     original_by_id = {order.id: order for order in orders}
     existing_numbers = {order.order_number: order.id for order in orders}
@@ -254,6 +288,10 @@ def _process_editor_changes(
         st.session_state[SELECTED_ORDER_SESSION_KEY] = selected_id
         st.rerun()
 
+    if not save_requested:
+        return
+
+    saved_changes = False
     for row in edited_rows:
         order_id = row.get("ID")
         if order_id is None:
@@ -273,10 +311,9 @@ def _process_editor_changes(
                     st.error(error)
                 return
             repository.create_order(**_row_to_order_payload(row, route_by_name))
-            session.commit()
-            recalculate_after_save(session)
+            saved_changes = True
             st.session_state[DRAFT_ORDER_SESSION_KEY] = False
-            st.rerun()
+            continue
 
         order = original_by_id.get(int(order_id))
         if order is not None and _row_changed(row, order):
@@ -293,9 +330,13 @@ def _process_editor_changes(
             repository.update_order(
                 order.id, **_row_to_order_payload(row, route_by_name)
             )
-            session.commit()
-            recalculate_after_save(session)
-            st.rerun()
+            saved_changes = True
+
+    if saved_changes:
+        session.commit()
+        recalculate_after_save(session)
+        st.session_state.pop(_ORDER_EDITOR_SIGNATURE_SESSION_KEY, None)
+        st.rerun()
 
 
 def _row_to_order_payload(
