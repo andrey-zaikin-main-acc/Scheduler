@@ -82,6 +82,7 @@ def test_validate_order_editor_row_accepts_current_order_number_on_update() -> N
 
     assert errors == []
 
+
 class _RerunRequested(Exception):
     pass
 
@@ -165,7 +166,9 @@ def test_opening_orders_page_does_not_save_or_recalculate(monkeypatch) -> None:
 
     monkeypatch.setattr(orders_page, "st", fake_st)
     monkeypatch.setattr(
-        orders_page, "recalculate_after_save", lambda session: recalculations.append(session)
+        orders_page,
+        "recalculate_after_save",
+        lambda session: recalculations.append(session),
     )
 
     orders_page._process_editor_changes(
@@ -181,7 +184,9 @@ def test_opening_orders_page_does_not_save_or_recalculate(monkeypatch) -> None:
     assert recalculations == []
 
 
-def test_navigation_to_orders_page_with_stale_editor_row_does_not_recalculate(monkeypatch) -> None:
+def test_navigation_to_orders_page_with_stale_editor_row_does_not_recalculate(
+    monkeypatch,
+) -> None:
     import app.ui.pages.orders_page as orders_page
 
     fake_st = _FakeStreamlit()
@@ -192,7 +197,9 @@ def test_navigation_to_orders_page_with_stale_editor_row_does_not_recalculate(mo
 
     monkeypatch.setattr(orders_page, "st", fake_st)
     monkeypatch.setattr(
-        orders_page, "recalculate_after_save", lambda session: recalculations.append(session)
+        orders_page,
+        "recalculate_after_save",
+        lambda session: recalculations.append(session),
     )
 
     orders_page._process_editor_changes(
@@ -218,7 +225,9 @@ def test_selecting_and_clearing_checkbox_only_changes_selection(monkeypatch) -> 
 
     monkeypatch.setattr(orders_page, "st", fake_st)
     monkeypatch.setattr(
-        orders_page, "recalculate_after_save", lambda session: recalculations.append(session)
+        orders_page,
+        "recalculate_after_save",
+        lambda session: recalculations.append(session),
     )
 
     with pytest.raises(_RerunRequested):
@@ -248,7 +257,9 @@ def test_selecting_and_clearing_checkbox_only_changes_selection(monkeypatch) -> 
     assert recalculations == []
 
 
-def test_save_changed_planning_fields_updates_and_recalculates_once(monkeypatch) -> None:
+def test_save_changed_planning_fields_updates_and_recalculates_once(
+    monkeypatch,
+) -> None:
     import app.ui.pages.orders_page as orders_page
 
     fake_st = _FakeStreamlit()
@@ -268,7 +279,9 @@ def test_save_changed_planning_fields_updates_and_recalculates_once(monkeypatch)
 
     monkeypatch.setattr(orders_page, "st", fake_st)
     monkeypatch.setattr(
-        orders_page, "recalculate_after_save", lambda session: recalculations.append(session)
+        orders_page,
+        "recalculate_after_save",
+        lambda session: recalculations.append(session),
     )
 
     with pytest.raises(_RerunRequested):
@@ -291,7 +304,9 @@ def test_save_changed_planning_fields_updates_and_recalculates_once(monkeypatch)
     assert recalculations == [session]
 
 
-def test_reopening_after_save_without_save_button_does_not_recalculate(monkeypatch) -> None:
+def test_reopening_after_save_without_save_button_does_not_recalculate(
+    monkeypatch,
+) -> None:
     import app.ui.pages.orders_page as orders_page
 
     fake_st = _FakeStreamlit()
@@ -302,7 +317,9 @@ def test_reopening_after_save_without_save_button_does_not_recalculate(monkeypat
 
     monkeypatch.setattr(orders_page, "st", fake_st)
     monkeypatch.setattr(
-        orders_page, "recalculate_after_save", lambda session: recalculations.append(session)
+        orders_page,
+        "recalculate_after_save",
+        lambda session: recalculations.append(session),
     )
 
     orders_page._process_editor_changes(
@@ -316,6 +333,7 @@ def test_reopening_after_save_without_save_button_does_not_recalculate(monkeypat
 
     assert repository.updated == []
     assert recalculations == []
+
 
 class _FakeColumn:
     def __enter__(self):
@@ -333,7 +351,9 @@ class _FakeExpander(_FakeColumn):
 
 
 class _FakeRouteCapacityStreamlit(_FakeStreamlit):
-    def __init__(self, *, clicked: set[str] | None = None, quantity: float = 0.0) -> None:
+    def __init__(
+        self, *, clicked: set[str] | None = None, quantity: float = 0.0
+    ) -> None:
         super().__init__()
         self.clicked = clicked or set()
         self.quantity = quantity
@@ -424,16 +444,23 @@ def test_capacity_calculated_only_by_calculate_button(monkeypatch) -> None:
 
     orders_page._render_route_capacity_check(object(), [route])
 
-    saved_params = fake_st.session_state[orders_page.ROUTE_CAPACITY_RESULT_SESSION_KEY]["params"]
+    saved_params = fake_st.session_state[orders_page.ROUTE_CAPACITY_RESULT_SESSION_KEY][
+        "params"
+    ]
     assert calls == [saved_params]
-    assert fake_st.session_state[orders_page.ROUTE_CAPACITY_RESULT_SESSION_KEY]["result"] is result
+    assert (
+        fake_st.session_state[orders_page.ROUTE_CAPACITY_RESULT_SESSION_KEY]["result"]
+        is result
+    )
 
 
 def test_zero_quantity_stops_before_slot_service(monkeypatch) -> None:
     import app.ui.pages.orders_page as orders_page
     from app.services.route_capacity_service import RouteCapacityResult
 
-    fake_st = _FakeRouteCapacityStreamlit(clicked={"Показать свободные слоты отгрузки"}, quantity=0.0)
+    fake_st = _FakeRouteCapacityStreamlit(
+        clicked={"Показать свободные слоты отгрузки"}, quantity=0.0
+    )
     route = Route(id=1, name="маршрут")
     period_start = date.today().replace(day=1)
     next_month = (period_start.replace(day=28) + timedelta(days=4)).replace(day=1)
@@ -463,6 +490,36 @@ def test_zero_quantity_stops_before_slot_service(monkeypatch) -> None:
 
 def test_save_button_is_not_primary() -> None:
     source = __import__("pathlib").Path("app/ui/pages/orders_page.py").read_text()
-    save_call = source.split('save_requested = st.button(', 1)[1].split(')', 1)[0]
+    save_call = source.split("save_requested = st.button(", 1)[1].split(")", 1)[0]
     assert '"Сохранить изменения"' in save_call
     assert 'type="primary"' not in save_call
+
+
+def test_route_capacity_cache_uses_planning_data_version(monkeypatch) -> None:
+    import app.ui.pages.orders_page as orders_page
+    from app.services.route_capacity_service import RouteCapacityResult
+
+    route = Route(id=1, name="маршрут")
+    period_start = date(2026, 7, 3)
+    period_end = date(2026, 7, 31)
+    fake_st = _FakeRouteCapacityStreamlit()
+    old_result = RouteCapacityResult(route.id, route.name, 100, "старый участок")
+    fake_st.session_state[orders_page.ROUTE_CAPACITY_RESULT_SESSION_KEY] = {
+        "params": (route.id, period_start, period_end),
+        "version": (1, 1, 1, 1, 1),
+        "result": old_result,
+    }
+
+    monkeypatch.setattr(orders_page, "st", fake_st)
+    monkeypatch.setattr(
+        orders_page,
+        "_planning_data_version",
+        lambda session: (2, 1, 1, 1, 1),
+    )
+
+    assert (
+        orders_page._get_current_capacity_result(
+            object(), route.id, period_start, period_end
+        )
+        is None
+    )

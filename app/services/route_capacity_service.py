@@ -8,13 +8,25 @@ import math
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.constants import ORDER_STATUS_NEW
-from app.db.models import PlannedOperationDay, Route, RouteOperation, WorkCenter
+from app.constants import ORDER_STATUS_NEW, PLANNABLE_ORDER_STATUSES
+from app.db.models import (
+    Order,
+    PlannedOperationDay,
+    RecalculationRun,
+    Route,
+    RouteOperation,
+    WorkCenter,
+)
 from app.planning.capacity_calendar import CapacityCalendar, CapacityReservation
 from app.planning.capacity_units import total_capacity_between
 from app.planning.entities import PlanningOrder, PlanningRouteOperation
+from app.planning.order_preparation import prepare_order, sort_prepared_orders
 from app.planning.planner import PlanningEngine
-from app.services.planning_mapper import map_work_center_to_planning
+from app.services.planning_mapper import (
+    map_order_to_planning,
+    map_route_operation_to_planning,
+    map_work_center_to_planning,
+)
 
 SIMULATED_ORDER_ID = -1
 
@@ -61,7 +73,13 @@ class RouteCapacityService:
         self.session = session
 
     def calculate_route_capacity(
-        self, route_id: int, period_start: date, period_end: date
+        self,
+        route_id: int,
+        period_start: date,
+        period_end: date,
+        *,
+        planning_start_date: date | None = None,
+        exclude_order_id: int | None = None,
     ) -> RouteCapacityResult:
         """Return maximum still-available route quantity in an inclusive period."""
         route = self._get_route(route_id)
@@ -148,7 +166,12 @@ class RouteCapacityService:
         if theoretical_max_quantity_int > 0 and not unique_warnings:
             max_schedulable_quantity, slots_for_max_quantity = (
                 self._find_max_schedulable_quantity(
-                    route, theoretical_max_quantity_int, period_start, period_end
+                    route,
+                    theoretical_max_quantity_int,
+                    period_start,
+                    period_end,
+                    planning_start_date=planning_start_date or period_start,
+                    exclude_order_id=exclude_order_id,
                 )
             )
 
@@ -164,12 +187,30 @@ class RouteCapacityService:
         )
 
     def find_available_shipment_slots(
-        self, route_id: int, quantity: float, period_start: date, period_end: date
+        self,
+        route_id: int,
+        quantity: float,
+        period_start: date,
+        period_end: date,
+        *,
+        planning_start_date: date | None = None,
+        exclude_order_id: int | None = None,
     ) -> list[date]:
         """Return shipment dates where a simulated order fits without persisting changes."""
-        capacity = self.calculate_route_capacity(route_id, period_start, period_end)
+        capacity = self.calculate_route_capacity(
+            route_id,
+            period_start,
+            period_end,
+            planning_start_date=planning_start_date,
+            exclude_order_id=exclude_order_id,
+        )
         return self.find_available_shipment_slots_for_capacity(
-            capacity, quantity, period_start, period_end
+            capacity,
+            quantity,
+            period_start,
+            period_end,
+            planning_start_date=planning_start_date,
+            exclude_order_id=exclude_order_id,
         )
 
     def find_available_shipment_slots_for_capacity(
@@ -178,6 +219,9 @@ class RouteCapacityService:
         quantity: float,
         period_start: date,
         period_end: date,
+        *,
+        planning_start_date: date | None = None,
+        exclude_order_id: int | None = None,
     ) -> list[date]:
         """Return shipment dates using an already confirmed capacity result."""
         if quantity <= 0 or quantity > capacity.max_quantity or capacity.warnings:
@@ -186,11 +230,23 @@ class RouteCapacityService:
         if route is None:
             return []
         return self._find_available_shipment_slots_unchecked(
-            route, quantity, period_start, period_end
+            route,
+            quantity,
+            period_start,
+            period_end,
+            planning_start_date=planning_start_date or period_start,
+            exclude_order_id=exclude_order_id,
         )
 
     def _find_max_schedulable_quantity(
-        self, route: Route, upper_bound: int, period_start: date, period_end: date
+        self,
+        route: Route,
+        upper_bound: int,
+        period_start: date,
+        period_end: date,
+        *,
+        planning_start_date: date,
+        exclude_order_id: int | None = None,
     ) -> tuple[int, list[date]]:
         """Return the largest integer quantity that has at least one shipment slot."""
         left = 1
@@ -201,7 +257,12 @@ class RouteCapacityService:
         while left <= right:
             mid = (left + right) // 2
             slots = self._find_available_shipment_slots_unchecked(
-                route, mid, period_start, period_end
+                route,
+                mid,
+                period_start,
+                period_end,
+                planning_start_date=planning_start_date,
+                exclude_order_id=exclude_order_id,
             )
             if slots:
                 best_quantity = mid
@@ -213,7 +274,14 @@ class RouteCapacityService:
         return best_quantity, best_slots
 
     def _find_available_shipment_slots_unchecked(
-        self, route: Route, quantity: float, period_start: date, period_end: date
+        self,
+        route: Route,
+        quantity: float,
+        period_start: date,
+        period_end: date,
+        *,
+        planning_start_date: date,
+        exclude_order_id: int | None = None,
     ) -> list[date]:
         """Return shipment slots for a quantity without recalculating capacity."""
         if quantity <= 0:
@@ -224,8 +292,10 @@ class RouteCapacityService:
         )
         slots: list[date] = []
         for shipment_date in _date_range(period_start, period_end):
-            calendar = self._build_capacity_calendar(period_start, period_end)
-            engine = PlanningEngine(calendar, planning_start_date=period_start)
+            calendar = self._build_capacity_calendar_for_precheck(
+                planning_start_date, period_end, exclude_order_id=exclude_order_id
+            )
+            engine = PlanningEngine(calendar, planning_start_date=planning_start_date)
             result = engine.plan_order(
                 PlanningOrder(
                     id=SIMULATED_ORDER_ID,
@@ -260,6 +330,23 @@ class RouteCapacityService:
             .group_by(PlannedOperationDay.work_center_id)
         ).all()
         return {work_center_id: float(hours) for work_center_id, hours in rows}
+
+    def _build_capacity_calendar_for_precheck(
+        self,
+        planning_start_date: date,
+        period_end: date,
+        *,
+        exclude_order_id: int | None = None,
+    ) -> CapacityCalendar:
+        """Build capacity from the active recalculation scenario or legacy saved plan."""
+        has_recalculation_run = self.session.scalar(
+            select(func.count()).select_from(RecalculationRun)
+        )
+        if has_recalculation_run:
+            return self._build_capacity_calendar_from_orders(
+                planning_start_date, exclude_order_id=exclude_order_id
+            )
+        return self._build_capacity_calendar(planning_start_date, period_end)
 
     def _build_capacity_calendar(self, start: date, end: date) -> CapacityCalendar:
         work_centers = self.session.scalars(
@@ -308,6 +395,52 @@ class RouteCapacityService:
             calendar._reservations[key].sort(
                 key=lambda item: item.start_datetime
             )  # noqa: SLF001
+        return calendar
+
+    def _build_capacity_calendar_from_orders(
+        self, planning_start_date: date, *, exclude_order_id: int | None = None
+    ) -> CapacityCalendar:
+        """Build the same in-memory scenario as full recalculation without DB writes."""
+        work_centers = self.session.scalars(
+            select(WorkCenter)
+            .where(WorkCenter.is_active.is_(True))
+            .order_by(WorkCenter.name)
+        ).all()
+        calendar = CapacityCalendar(
+            [map_work_center_to_planning(work_center) for work_center in work_centers]
+        )
+        engine = PlanningEngine(calendar, planning_start_date=planning_start_date)
+        orders = self.session.scalars(
+            select(Order)
+            .where(Order.status.in_(PLANNABLE_ORDER_STATUSES))
+            .where(
+                Order.id != exclude_order_id if exclude_order_id is not None else True
+            )
+            .options(
+                selectinload(Order.route)
+                .selectinload(Route.operations)
+                .selectinload(RouteOperation.work_center)
+            )
+            .order_by(Order.shipment_date, Order.id)
+        ).all()
+        prepared_orders = []
+        for order in orders:
+            if order.route is None:
+                continue
+            try:
+                prepared_orders.append(
+                    prepare_order(
+                        map_order_to_planning(order),
+                        tuple(
+                            map_route_operation_to_planning(operation)
+                            for operation in order.route.operations
+                        ),
+                    )
+                )
+            except ValueError:
+                continue
+        for prepared_order in sort_prepared_orders(prepared_orders):
+            engine.plan_prepared_order(prepared_order)
         return calendar
 
 

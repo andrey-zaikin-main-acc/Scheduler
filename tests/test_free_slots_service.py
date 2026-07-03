@@ -114,7 +114,7 @@ def test_route_capacity_uses_bottleneck_work_center(session: Session) -> None:
     assert rows == [
         {
             "Маршрут": "Маршрут A",
-            "Возможный тираж": 500.0,
+            "Теоретический максимальный тираж": 500.0,
             "Ограничивающий участок": "Печать",
         }
     ]

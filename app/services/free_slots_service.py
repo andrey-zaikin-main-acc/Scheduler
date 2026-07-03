@@ -45,7 +45,7 @@ class RouteCapacityRow:
         """Return a UI-friendly row."""
         return {
             "Маршрут": self.route,
-            "Возможный тираж": round(self.possible_quantity, 2),
+            "Теоретический максимальный тираж": round(self.possible_quantity, 2),
             "Ограничивающий участок": self.bottleneck_work_center,
         }
 

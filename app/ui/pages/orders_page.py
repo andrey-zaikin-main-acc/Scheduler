@@ -4,7 +4,7 @@ from datetime import date, timedelta
 from typing import Any
 
 import streamlit as st
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.constants import (
@@ -16,7 +16,7 @@ from app.constants import (
     ORDER_STATUS_PLANNED,
 )
 from app.db.database import SessionLocal
-from app.db.models import Order, Route
+from app.db.models import Order, RecalculationRun, Route, RouteOperation, WorkCenter
 from app.repositories.orders_repository import OrdersRepository
 from app.services.route_capacity_service import RouteCapacityService
 from app.ui.components.tables import order_rows
@@ -114,6 +114,7 @@ def render_orders_page() -> None:
                     int(selected_order_id)
                 ):
                     session.commit()
+                    _clear_route_capacity_cache()
                     recalculate_after_save(session)
                     st.session_state[SELECTED_ORDER_SESSION_KEY] = None
                     st.session_state[DRAFT_ORDER_SESSION_KEY] = False
@@ -197,7 +198,9 @@ def _sync_order_editor_state(rows: list[dict[str, Any]]) -> None:
         st.session_state[_ORDER_EDITOR_SIGNATURE_SESSION_KEY] = signature
 
 
-def _order_editor_rows_signature(rows: list[dict[str, Any]]) -> tuple[tuple[Any, ...], ...]:
+def _order_editor_rows_signature(
+    rows: list[dict[str, Any]],
+) -> tuple[tuple[Any, ...], ...]:
     """Return a stable signature for persisted order data, excluding UI selection."""
     data_columns = [column for column in EDITOR_COLUMNS if column != "Выбран"]
     return tuple(tuple(row.get(column) for column in data_columns) for row in rows)
@@ -333,6 +336,7 @@ def _process_editor_changes(
 
     if saved_changes:
         session.commit()
+        _clear_route_capacity_cache()
         recalculate_after_save(session)
         st.session_state.pop(_ORDER_EDITOR_SIGNATURE_SESSION_KEY, None)
         st.rerun()
@@ -385,31 +389,77 @@ ROUTE_CAPACITY_RESULT_SESSION_KEY = "orders_route_capacity_result"
 ROUTE_CAPACITY_SLOTS_SESSION_KEY = "orders_route_capacity_slots"
 
 
+def _planning_data_version(session) -> tuple[int | None, int, int, int, int]:
+    """Return a cache version that changes when planning inputs or runs change."""
+    try:
+        latest_run_id = session.scalar(select(func.max(RecalculationRun.id)))
+        order_version = session.execute(
+            select(func.count(Order.id), func.max(Order.updated_at))
+        ).one()
+        route_version = session.execute(
+            select(func.count(Route.id), func.max(Route.updated_at))
+        ).one()
+        operation_version = session.execute(
+            select(func.count(RouteOperation.id), func.max(RouteOperation.updated_at))
+        ).one()
+        work_center_version = session.execute(
+            select(func.count(WorkCenter.id), func.max(WorkCenter.updated_at))
+        ).one()
+    except AttributeError:
+        latest_run_id = None
+        order_version = route_version = operation_version = work_center_version = None
+    return (
+        latest_run_id,
+        hash(order_version),
+        hash(route_version),
+        hash(operation_version),
+        hash(work_center_version),
+    )
+
+
 def _route_capacity_params(
     route_id: int, period_start: date, period_end: date
 ) -> tuple[int, date, date]:
-    """Return a stable key for a capacity result."""
+    """Return a stable key for the selected route and period."""
     return route_id, period_start, period_end
 
 
-def _get_current_capacity_result(route_id: int, period_start: date, period_end: date):
+def _get_current_capacity_result(
+    session, route_id: int, period_start: date, period_end: date
+):
     """Return saved capacity only when it matches current route and period."""
     saved = st.session_state.get(ROUTE_CAPACITY_RESULT_SESSION_KEY)
     params = _route_capacity_params(route_id, period_start, period_end)
-    if isinstance(saved, dict) and saved.get("params") == params:
+    version = _planning_data_version(session)
+    if (
+        isinstance(saved, dict)
+        and saved.get("params") == params
+        and saved.get("version") == version
+    ):
         return saved.get("result")
     return None
 
 
 def _get_current_slots(
-    route_id: int, period_start: date, period_end: date, quantity: float
+    session, route_id: int, period_start: date, period_end: date, quantity: float
 ):
     """Return saved slots only when they match current route, period and quantity."""
     saved = st.session_state.get(ROUTE_CAPACITY_SLOTS_SESSION_KEY)
     params = (*_route_capacity_params(route_id, period_start, period_end), quantity)
-    if isinstance(saved, dict) and saved.get("params") == params:
+    version = _planning_data_version(session)
+    if (
+        isinstance(saved, dict)
+        and saved.get("params") == params
+        and saved.get("version") == version
+    ):
         return saved.get("slots")
     return None
+
+
+def _clear_route_capacity_cache() -> None:
+    """Clear saved capacity and shipment slots after planning data changes."""
+    st.session_state.pop(ROUTE_CAPACITY_RESULT_SESSION_KEY, None)
+    st.session_state.pop(ROUTE_CAPACITY_SLOTS_SESSION_KEY, None)
 
 
 def _clear_route_capacity_slots() -> None:
@@ -467,7 +517,7 @@ def _render_route_capacity_check(session, routes: list[Route]) -> None:
         st.info("Выберите дату начала, дату окончания периода и маршрут.")
     else:
         capacity = _get_current_capacity_result(
-            selected_route.id, period_start, period_end
+            session, selected_route.id, period_start, period_end
         )
         if capacity is None:
             _clear_route_capacity_slots()
@@ -486,6 +536,7 @@ def _render_route_capacity_check(session, routes: list[Route]) -> None:
             "params": _route_capacity_params(
                 selected_route.id, period_start, period_end
             ),
+            "version": _planning_data_version(session),
             "result": capacity,
         }
         _clear_route_capacity_slots()
@@ -496,7 +547,8 @@ def _render_route_capacity_check(session, routes: list[Route]) -> None:
                 st.warning(warning)
         metric_col, bottleneck_col = st.columns(2)
         metric_col.metric(
-            "Максимальный тираж", f"{capacity.max_quantity:,.0f}".replace(",", " ")
+            "Максимальный реально размещаемый тираж",
+            f"{capacity.max_quantity:,.0f}".replace(",", " "),
         )
         bottleneck_col.metric(
             "Ограничивающий участок", capacity.bottleneck_work_center or "—"
@@ -517,7 +569,7 @@ def _render_route_capacity_check(session, routes: list[Route]) -> None:
             st.error("Выберите период и маршрут.")
             return
         capacity = _get_current_capacity_result(
-            selected_route.id, period_start, period_end
+            session, selected_route.id, period_start, period_end
         )
         if capacity is None:
             st.error("Сначала рассчитайте доступный тираж.")
@@ -527,7 +579,9 @@ def _render_route_capacity_check(session, routes: list[Route]) -> None:
                 "Введённый тираж превышает максимальный доступный тираж для выбранного маршрута и периода."
             )
             return
-        slots = RouteCapacityService(session).find_available_shipment_slots_for_capacity(
+        slots = RouteCapacityService(
+            session
+        ).find_available_shipment_slots_for_capacity(
             capacity, quantity, period_start, period_end
         )
         st.session_state[ROUTE_CAPACITY_SLOTS_SESSION_KEY] = {
@@ -535,6 +589,7 @@ def _render_route_capacity_check(session, routes: list[Route]) -> None:
                 *_route_capacity_params(selected_route.id, period_start, period_end),
                 quantity,
             ),
+            "version": _planning_data_version(session),
             "slots": slots,
         }
     elif (
@@ -542,7 +597,9 @@ def _render_route_capacity_check(session, routes: list[Route]) -> None:
         and period_start is not None
         and period_end is not None
     ):
-        slots = _get_current_slots(selected_route.id, period_start, period_end, quantity)
+        slots = _get_current_slots(
+            session, selected_route.id, period_start, period_end, quantity
+        )
     else:
         slots = None
 

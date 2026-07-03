@@ -179,3 +179,72 @@ def test_seed_planned_orders_do_not_start_or_finish_after_shipment_date() -> Non
             )
             assert last_finish is not None
             assert last_finish.date() <= order.shipment_date
+
+
+def test_excel_105_plans_with_same_rules_as_capacity_precheck() -> None:
+    from app.constants import ORDER_STATUS_CANCELLED, ORDER_STATUS_CONFLICT
+    from app.db.models import PlannedOperation, PlannedOperationDay
+    from app.services.recalculation_service import RecalculationService
+    from app.services.route_capacity_service import RouteCapacityService
+
+    planning_start = date(2026, 7, 3)
+    shipment_deadline = date(2026, 7, 31)
+
+    with make_session() as session:
+        seed_demo_data(session)
+        route = session.scalar(select(Route).where(Route.name == "поток театры"))
+        assert route is not None
+
+        for order_number in ["EXCEL-101", "EXCEL-102", "EXCEL-103", "EXCEL-104"]:
+            order = session.scalar(
+                select(Order).where(Order.order_number == order_number)
+            )
+            assert order is not None
+            order.status = ORDER_STATUS_CANCELLED
+
+        excel_105 = session.scalar(
+            select(Order).where(Order.order_number == "EXCEL-105")
+        )
+        assert excel_105 is not None
+        excel_105.route_id = route.id
+        excel_105.quantity = 100
+        excel_105.shipment_date = shipment_deadline
+        session.commit()
+
+        RecalculationService(
+            session, planning_start_date=planning_start
+        ).recalculate_plan()
+        session.refresh(excel_105)
+
+        assert excel_105.status != ORDER_STATUS_CONFLICT
+        assert excel_105.calculated_start_date is not None
+
+        last_finish = session.scalar(
+            select(PlannedOperationDay.end_datetime)
+            .join(PlannedOperationDay.planned_operation)
+            .where(PlannedOperation.order_id == excel_105.id)
+            .order_by(PlannedOperationDay.end_datetime.desc())
+            .limit(1)
+        )
+        assert last_finish is not None
+        assert last_finish.date() <= shipment_deadline
+
+        capacity_service = RouteCapacityService(session)
+        capacity = capacity_service.calculate_route_capacity(
+            route.id,
+            planning_start,
+            shipment_deadline,
+            planning_start_date=planning_start,
+            exclude_order_id=excel_105.id,
+        )
+        assert capacity.max_quantity >= 100
+
+        slots = capacity_service.find_available_shipment_slots_for_capacity(
+            capacity,
+            100,
+            planning_start,
+            shipment_deadline,
+            planning_start_date=planning_start,
+            exclude_order_id=excel_105.id,
+        )
+        assert shipment_deadline in slots
