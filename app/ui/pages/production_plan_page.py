@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.db.database import SessionLocal
 from app.db.models import Order, PlannedOperation, PlannedOperationDay, WorkCenter
 from app.ui.components.tables import planned_operation_day_rows, planned_operation_rows
+from app.ui.pages.page_utils import normalize_date_range
 
 
 def render_production_plan_page() -> None:
@@ -23,7 +24,7 @@ def render_production_plan_page() -> None:
 
         with st.expander("Фильтры", expanded=True):
             period = st.date_input("Период", value=(default_start, default_end))
-            start_date, end_date = _normalize_period(period, default_start, default_end)
+            start_date, end_date = normalize_date_range(period, default_start, default_end)
             work_center_id = st.selectbox(
                 "Участок",
                 options=[None, *[item.id for item in work_centers]],
@@ -82,9 +83,3 @@ def render_production_plan_page() -> None:
         st.dataframe(day_rows, use_container_width=True, hide_index=True)
     else:
         st.info("Дневных размещений по выбранным фильтрам нет.")
-
-
-def _normalize_period(period, default_start: date, default_end: date) -> tuple[date, date]:
-    if isinstance(period, tuple) and len(period) == 2:
-        return period
-    return default_start, default_end
