@@ -255,7 +255,7 @@ def test_capacity_is_zero_when_no_positive_quantity_has_slots(
     monkeypatch.setattr(
         RouteCapacityService,
         "_find_available_shipment_slots_unchecked",
-        lambda self, route, quantity, period_start, period_end: [],
+        lambda self, route, quantity, period_start, period_end, **kwargs: [],
     )
 
     result = RouteCapacityService(session).calculate_route_capacity(
