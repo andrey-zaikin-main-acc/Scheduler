@@ -22,6 +22,7 @@ class PlanningWorkCenter:
     name: str
     available_hours_per_day: float
     workday_start_time: time = time(hour=9)
+    prevent_order_interruption: bool = False
 
 
 @dataclass(frozen=True)

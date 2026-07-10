@@ -31,6 +31,7 @@ class WorkCentersRepository:
         available_hours_per_day: float,
         workday_start_time: time = time(hour=9),
         is_active: bool = True,
+        prevent_order_interruption: bool = False,
     ) -> WorkCenter:
         """Create a work center with positive daily capacity."""
         work_center = WorkCenter(
@@ -38,6 +39,7 @@ class WorkCentersRepository:
             available_hours_per_day=available_hours_per_day,
             workday_start_time=workday_start_time,
             is_active=is_active,
+            prevent_order_interruption=prevent_order_interruption,
         )
         self.session.add(work_center)
         self.session.flush()
@@ -51,6 +53,7 @@ class WorkCentersRepository:
         available_hours_per_day: float,
         workday_start_time: time,
         is_active: bool,
+        prevent_order_interruption: bool,
     ) -> WorkCenter | None:
         """Update a work center directory entry."""
         work_center = self.session.get(WorkCenter, work_center_id)
@@ -60,6 +63,7 @@ class WorkCentersRepository:
         work_center.available_hours_per_day = available_hours_per_day
         work_center.workday_start_time = workday_start_time
         work_center.is_active = is_active
+        work_center.prevent_order_interruption = prevent_order_interruption
         self.session.flush()
         return work_center
 
