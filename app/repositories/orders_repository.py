@@ -6,7 +6,12 @@ from datetime import date
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.constants import MANUAL_ORDER_STATUSES, ORDER_STATUS_NEW
+from app.constants import (
+    CALCULATED_ORDER_STATUSES,
+    MANUAL_ORDER_STATUSES,
+    ORDER_STATUS_CANCELLED,
+    ORDER_STATUS_NEW,
+)
 from app.db.models import (
     Order,
     PlanChange,
@@ -74,6 +79,9 @@ class OrdersRepository:
         if order.status != status:
             order.calculated_start_date = None
         order.status = status
+        if status == ORDER_STATUS_CANCELLED:
+            order.calculated_start_date = None
+            self._clear_order_conflicts(order_id)
         self.session.flush()
         return order
 
@@ -93,7 +101,8 @@ class OrdersRepository:
         order = self.get_order(order_id)
         if order is None:
             return None
-        self._validate_manual_status(status)
+        original_status = order.status
+        self._validate_manual_status(status, current_status=original_status)
         planning_inputs_changed = (
             float(order.quantity) != float(quantity)
             or order.shipment_date != shipment_date
@@ -109,13 +118,28 @@ class OrdersRepository:
         order.status = status
         if planning_inputs_changed:
             order.calculated_start_date = None
+        if status == ORDER_STATUS_CANCELLED:
+            order.calculated_start_date = None
+            self._clear_order_conflicts(order_id)
         self.session.flush()
         return order
 
     @staticmethod
-    def _validate_manual_status(status: str) -> None:
-        if status not in MANUAL_ORDER_STATUSES:
-            raise ValueError("Only statuses 'Новый' and 'Отменён' can be assigned manually.")
+    def _validate_manual_status(
+        status: str, *, current_status: str | None = None
+    ) -> None:
+        if status in MANUAL_ORDER_STATUSES:
+            return
+        if status == current_status and status in CALCULATED_ORDER_STATUSES:
+            return
+        raise ValueError(
+            "Статус 'Запланирован' назначается только после пересчёта; вручную можно назначить только 'Новый' или 'Отменён'."
+        )
+
+    def _clear_order_conflicts(self, order_id: int) -> None:
+        self.session.execute(
+            delete(PlanningConflict).where(PlanningConflict.order_id == order_id)
+        )
 
     def delete_order(self, order_id: int) -> bool:
         """Physically delete an order and all saved planning data tied to it."""

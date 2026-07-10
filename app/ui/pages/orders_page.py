@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.constants import (
     CALCULATED_ORDER_STATUSES,
     MANUAL_ORDER_STATUSES,
+    ORDER_STATUSES,
     ORDER_STATUS_NEW,
 )
 from app.db.database import SessionLocal
@@ -134,7 +135,7 @@ def render_orders_page() -> None:
             key=ORDER_EDITOR_KEY,
             use_container_width=True,
             hide_index=True,
-            disabled=["ID", "Конфликт", "Дата запуска", "Статус"],
+            disabled=["ID", "Конфликт", "Дата запуска"],
             column_order=EDITOR_COLUMNS,
             num_rows="fixed",
             column_config={
@@ -151,13 +152,12 @@ def render_orders_page() -> None:
                 "Маршрут": st.column_config.SelectboxColumn(
                     "Маршрут", options=list(route_by_name)
                 ),
-                "Статус": st.column_config.TextColumn(
+                "Статус": st.column_config.SelectboxColumn(
                     "Статус",
-                    disabled=True,
+                    options=list(ORDER_STATUSES),
                     help=(
-                        "Текущий статус отображается в таблице. "
-                        "Ручное изменение статуса выполняется в отдельных списках ниже таблицы: "
-                        "можно выбрать только «Новый» или «Отменён», а расчётные статусы назначаются системой после пересчёта."
+                        "Вручную можно сохранить только «Новый» или «Отменён». "
+                        "«Запланирован» назначается системой после пересчёта."
                     ),
                 ),
                 # Дата запуска рассчитывается планировщиком при пересчёте плана, поэтому ручное редактирование отключено.
@@ -167,8 +167,6 @@ def render_orders_page() -> None:
                 "Конфликт": st.column_config.CheckboxColumn("Конфликт", disabled=True),
             },
         )
-        status_overrides = render_order_status_selectors(edited_rows)
-        edited_rows = apply_order_status_overrides(edited_rows, status_overrides)
         save_requested = st.button(
             "Сохранить изменения и пересчитать план",
             use_container_width=True,
@@ -204,17 +202,8 @@ def _order_editor_rows_signature(
 
 
 def order_status_options_for_row(status: str) -> list[str]:
-    """Return row-specific manual status choices with current calculated status visible."""
-    if status in CALCULATED_ORDER_STATUSES:
-        return [status, *MANUAL_ORDER_STATUSES]
-    if status == ORDER_STATUS_NEW:
-        return list(MANUAL_ORDER_STATUSES)
-    if status in MANUAL_ORDER_STATUSES:
-        return [
-            status,
-            *[option for option in MANUAL_ORDER_STATUSES if option != status],
-        ]
-    return list(MANUAL_ORDER_STATUSES)
+    """Return status choices displayed by the orders data editor."""
+    return list(ORDER_STATUSES)
 
 
 def render_order_status_selectors(rows: list[dict[str, Any]]) -> dict[int, str]:
@@ -315,7 +304,9 @@ def validate_order_editor_row(
         and status not in MANUAL_ORDER_STATUSES
         and not (status == original_status and status in CALCULATED_ORDER_STATUSES)
     ):
-        errors.append("Вручную можно назначить только статус «Новый» или «Отменён».")
+        errors.append(
+            "Статус «Запланирован» назначается только после пересчёта; вручную можно сохранить только «Новый» или «Отменён»."
+        )
     return errors
 
 
@@ -403,8 +394,6 @@ def _row_to_order_payload(
     original_status: str | None = None,
 ) -> dict[str, Any]:
     status = str(row["Статус"])
-    if status == original_status and status in CALCULATED_ORDER_STATUSES:
-        status = ORDER_STATUS_NEW
     return {
         "order_number": str(row["Номер"]).strip(),
         "client_name": str(row["Клиент"]).strip(),

@@ -5,7 +5,6 @@ import pytest
 pytest.importorskip("streamlit")
 from app.constants import (
     ORDER_STATUS_CANCELLED,
-    ORDER_STATUS_CONFLICT,
     ORDER_STATUS_NEW,
     ORDER_STATUS_PLANNED,
     MANUAL_ORDER_STATUSES,
@@ -19,46 +18,22 @@ from app.ui.pages.orders_page import (
 )
 
 
-def test_new_status_displays_and_can_change_to_cancelled() -> None:
+def test_status_dropdown_displays_all_current_statuses() -> None:
     assert order_status_options_for_row(ORDER_STATUS_NEW) == [
         ORDER_STATUS_NEW,
-        ORDER_STATUS_CANCELLED,
-    ]
-
-
-def test_cancelled_status_displays_and_can_change_to_new() -> None:
-    assert order_status_options_for_row(ORDER_STATUS_CANCELLED) == [
-        ORDER_STATUS_CANCELLED,
-        ORDER_STATUS_NEW,
-    ]
-
-
-def test_planned_status_displays_after_recalculation() -> None:
-    assert order_status_options_for_row(ORDER_STATUS_PLANNED) == [
         ORDER_STATUS_PLANNED,
-        ORDER_STATUS_NEW,
         ORDER_STATUS_CANCELLED,
     ]
-
-
-def test_conflict_status_displays_after_recalculation() -> None:
-    assert order_status_options_for_row(ORDER_STATUS_CONFLICT) == [
-        ORDER_STATUS_CONFLICT,
+    assert order_status_options_for_row(ORDER_STATUS_PLANNED) == [
         ORDER_STATUS_NEW,
+        ORDER_STATUS_PLANNED,
         ORDER_STATUS_CANCELLED,
     ]
-
-
-def test_planned_row_cannot_select_conflict_status() -> None:
-    assert ORDER_STATUS_CONFLICT not in order_status_options_for_row(
-        ORDER_STATUS_PLANNED
-    )
-
-
-def test_conflict_row_cannot_select_planned_status() -> None:
-    assert ORDER_STATUS_PLANNED not in order_status_options_for_row(
-        ORDER_STATUS_CONFLICT
-    )
+    assert order_status_options_for_row(ORDER_STATUS_CANCELLED) == [
+        ORDER_STATUS_NEW,
+        ORDER_STATUS_PLANNED,
+        ORDER_STATUS_CANCELLED,
+    ]
 
 
 def test_status_overrides_are_applied_per_row() -> None:
@@ -576,7 +551,7 @@ def test_validate_new_order_rejects_calculated_statuses() -> None:
         "Срок отгрузки": date(2026, 7, 10),
         "Маршрут": "наша сборка",
     }
-    for status in (ORDER_STATUS_PLANNED, ORDER_STATUS_CONFLICT, ORDER_STATUS_CANCELLED):
+    for status in (ORDER_STATUS_PLANNED, ORDER_STATUS_CANCELLED):
         errors = validate_order_editor_row(
             {**base, "Статус": status},
             route_names={"наша сборка"},
@@ -605,14 +580,17 @@ def test_validate_existing_order_allows_only_manual_statuses() -> None:
             )
             == []
         )
-    for status in (ORDER_STATUS_PLANNED, ORDER_STATUS_CONFLICT):
+    for status in (ORDER_STATUS_PLANNED,):
         errors = validate_order_editor_row(
             {**base, "Статус": status},
             route_names={"наша сборка"},
             existing_numbers={"N-1": 1},
             current_order_id=1,
         )
-        assert "Вручную можно назначить только статус «Новый» или «Отменён»." in errors
+        assert (
+            "Статус «Запланирован» назначается только после пересчёта; вручную можно сохранить только «Новый» или «Отменён»."
+            in errors
+        )
 
 
 def test_route_capacity_cache_uses_planning_data_version(monkeypatch) -> None:
@@ -676,7 +654,7 @@ def test_can_change_quantity_for_planned_order_without_manual_status_change(
         )
 
     assert repository.updated[0][1]["quantity"] == 1700.0
-    assert repository.updated[0][1]["status"] == ORDER_STATUS_NEW
+    assert repository.updated[0][1]["status"] == ORDER_STATUS_PLANNED
     assert recalculations == [session]
 
 
@@ -690,7 +668,7 @@ def test_can_change_conflict_order_data_without_manual_status_change(
     session = _FakeSession()
     recalculations = []
     order = _order()
-    order.status = ORDER_STATUS_CONFLICT
+    order.status = ORDER_STATUS_NEW
     edited_row = {**_order_row(order), "Клиент": "Новый клиент"}
 
     monkeypatch.setattr(orders_page, "st", fake_st)

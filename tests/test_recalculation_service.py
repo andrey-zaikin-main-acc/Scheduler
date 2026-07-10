@@ -6,7 +6,7 @@ pytest.importorskip("sqlalchemy")
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.constants import ORDER_STATUS_CONFLICT, ORDER_STATUS_NEW, ORDER_STATUS_PLANNED
+from app.constants import ORDER_STATUS_NEW, ORDER_STATUS_PLANNED
 from app.db.database import Base
 from app.db.models import (
     Order,
@@ -105,7 +105,7 @@ def test_recalculation_service_persists_conflict(session: Session) -> None:
     assert summary.planned_orders == 0
     assert summary.conflicts == 1
     assert session.query(PlannedOperation).count() == 0
-    assert order.status == ORDER_STATUS_CONFLICT
+    assert order.status == ORDER_STATUS_NEW
     assert conflict.order_id == order.id
     assert conflict.deficit_hours == pytest.approx(3 - 1 / 31)
 
@@ -263,7 +263,9 @@ def test_order_update_clears_stale_calculated_start_date_before_recalculation(
     assert updated.calculated_start_date == date(2026, 7, 1)
 
 
-def test_cancelled_order_is_kept_but_excluded_from_recalculation(session: Session) -> None:
+def test_cancelled_order_is_kept_but_excluded_from_recalculation(
+    session: Session,
+) -> None:
     from app.constants import ORDER_STATUS_CANCELLED
 
     route = create_route_with_operation(
@@ -293,7 +295,9 @@ def test_cancelled_order_is_kept_but_excluded_from_recalculation(session: Sessio
     assert session.query(PlanningConflict).filter_by(order_id=order.id).count() == 0
 
 
-def test_conflicted_order_participates_again_and_can_become_planned(session: Session) -> None:
+def test_conflicted_order_participates_again_and_can_become_planned(
+    session: Session,
+) -> None:
     route = create_route_with_operation(
         session, hours_per_day=248, labor_hours_per_1000=8
     )
@@ -304,12 +308,14 @@ def test_conflicted_order_participates_again_and_can_become_planned(session: Ses
         quantity=1000,
         shipment_date=date(2026, 7, 10),
         route_id=route.id,
-        status=ORDER_STATUS_CONFLICT,
+        status=ORDER_STATUS_NEW,
     )
     session.add(order)
     session.commit()
 
-    RecalculationService(session, planning_start_date=date(2026, 7, 1)).recalculate_plan()
+    RecalculationService(
+        session, planning_start_date=date(2026, 7, 1)
+    ).recalculate_plan()
 
     assert order.status == ORDER_STATUS_PLANNED
     assert session.query(PlannedOperation).filter_by(order_id=order.id).count() == 1

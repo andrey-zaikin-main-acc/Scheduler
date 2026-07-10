@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.constants import (
-    ORDER_STATUS_CONFLICT,
+    ORDER_STATUS_NEW,
     ORDER_STATUS_PLANNED,
     PLANNABLE_ORDER_STATUSES,
 )
@@ -266,7 +266,7 @@ class RecalculationService:
         if order is None:
             order = self.orders_repository.get_order(result.order_id)
         if order is not None:
-            order.status = ORDER_STATUS_CONFLICT
+            order.status = ORDER_STATUS_NEW
             order.calculated_start_date = None
         self.conflicts_repository.add_conflict(map_conflict_to_orm(result.conflict))
 

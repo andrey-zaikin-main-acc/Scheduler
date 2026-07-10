@@ -182,7 +182,7 @@ def test_seed_planned_orders_do_not_start_or_finish_after_shipment_date() -> Non
 
 
 def test_excel_105_plans_with_same_rules_as_capacity_precheck() -> None:
-    from app.constants import ORDER_STATUS_CANCELLED, ORDER_STATUS_CONFLICT
+    from app.constants import ORDER_STATUS_CANCELLED, ORDER_STATUS_PLANNED
     from app.db.models import PlannedOperation, PlannedOperationDay
     from app.services.recalculation_service import RecalculationService
     from app.services.route_capacity_service import RouteCapacityService
@@ -216,7 +216,7 @@ def test_excel_105_plans_with_same_rules_as_capacity_precheck() -> None:
         ).recalculate_plan()
         session.refresh(excel_105)
 
-        assert excel_105.status != ORDER_STATUS_CONFLICT
+        assert excel_105.status == ORDER_STATUS_PLANNED
         assert excel_105.calculated_start_date is not None
 
         last_finish = session.scalar(
