@@ -27,6 +27,7 @@ def create_all() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_work_center_workday_start_time_column()
     _ensure_work_center_prevent_order_interruption_column()
+    _ensure_route_prevent_order_interruption_column()
     _ensure_planned_operation_day_intraday_columns()
 
 
@@ -87,6 +88,29 @@ def _ensure_work_center_prevent_order_interruption_column() -> None:
         connection.execute(
             text(
                 "UPDATE work_centers "
+                "SET prevent_order_interruption = COALESCE(prevent_order_interruption, 0)"
+            )
+        )
+
+
+def _ensure_route_prevent_order_interruption_column() -> None:
+    """Add order-interruption protection flag to existing route rows."""
+    inspector = inspect(engine)
+    if "routes" not in inspector.get_table_names():
+        return
+    existing_columns = {column["name"] for column in inspector.get_columns("routes")}
+    if "prevent_order_interruption" in existing_columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE routes "
+                "ADD COLUMN prevent_order_interruption BOOLEAN NOT NULL DEFAULT 0"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE routes "
                 "SET prevent_order_interruption = COALESCE(prevent_order_interruption, 0)"
             )
         )

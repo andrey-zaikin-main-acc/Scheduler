@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 
 pytest.importorskip("sqlalchemy")
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -250,3 +250,45 @@ def test_new_work_center_prevent_order_interruption_default_is_false(session: Se
     loaded = session.get(WorkCenter, work_center.id)
     assert loaded is not None
     assert loaded.prevent_order_interruption is False
+
+
+def test_create_all_migrates_existing_routes_prevent_order_interruption_column(
+    monkeypatch, tmp_path
+) -> None:
+    from app.db import database
+
+    db_path = tmp_path / "legacy.sqlite"
+    legacy_engine = create_engine(
+        f"sqlite:///{db_path}", connect_args={"check_same_thread": False}
+    )
+    with legacy_engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE routes (
+                id INTEGER PRIMARY KEY,
+                name VARCHAR(255) NOT NULL UNIQUE,
+                description TEXT,
+                is_active BOOLEAN NOT NULL DEFAULT 1,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+            """
+        )
+        connection.exec_driver_sql(
+            """
+            INSERT INTO routes (name, description, is_active, created_at, updated_at)
+            VALUES ('наша сборка', NULL, 1, '2026-07-10 00:00:00', '2026-07-10 00:00:00')
+            """
+        )
+
+    monkeypatch.setattr(database, "engine", legacy_engine)
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+
+    database.create_all()
+
+    columns = {column["name"] for column in inspect(legacy_engine).get_columns("routes")}
+    assert "prevent_order_interruption" in columns
+    with sessionmaker(bind=legacy_engine)() as session:
+        route = session.scalar(select(Route).where(Route.name == "наша сборка"))
+    assert route is not None
+    assert route.prevent_order_interruption is False
