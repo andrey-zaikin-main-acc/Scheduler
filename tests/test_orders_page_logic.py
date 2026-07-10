@@ -3,9 +3,77 @@ from datetime import date, timedelta
 import pytest
 
 pytest.importorskip("streamlit")
-from app.constants import ORDER_STATUS_CANCELLED, ORDER_STATUS_CONFLICT, ORDER_STATUS_NEW, ORDER_STATUS_PLANNED, MANUAL_ORDER_STATUSES
+from app.constants import (
+    ORDER_STATUS_CANCELLED,
+    ORDER_STATUS_CONFLICT,
+    ORDER_STATUS_NEW,
+    ORDER_STATUS_PLANNED,
+    MANUAL_ORDER_STATUSES,
+)
 from app.db.models import Order, Route
-from app.ui.pages.orders_page import build_order_editor_rows, validate_order_editor_row
+from app.ui.pages.orders_page import (
+    apply_order_status_overrides,
+    build_order_editor_rows,
+    order_status_options_for_row,
+    validate_order_editor_row,
+)
+
+
+def test_new_status_displays_and_can_change_to_cancelled() -> None:
+    assert order_status_options_for_row(ORDER_STATUS_NEW) == [
+        ORDER_STATUS_NEW,
+        ORDER_STATUS_CANCELLED,
+    ]
+
+
+def test_cancelled_status_displays_and_can_change_to_new() -> None:
+    assert order_status_options_for_row(ORDER_STATUS_CANCELLED) == [
+        ORDER_STATUS_CANCELLED,
+        ORDER_STATUS_NEW,
+    ]
+
+
+def test_planned_status_displays_after_recalculation() -> None:
+    assert order_status_options_for_row(ORDER_STATUS_PLANNED) == [
+        ORDER_STATUS_PLANNED,
+        ORDER_STATUS_NEW,
+        ORDER_STATUS_CANCELLED,
+    ]
+
+
+def test_conflict_status_displays_after_recalculation() -> None:
+    assert order_status_options_for_row(ORDER_STATUS_CONFLICT) == [
+        ORDER_STATUS_CONFLICT,
+        ORDER_STATUS_NEW,
+        ORDER_STATUS_CANCELLED,
+    ]
+
+
+def test_planned_row_cannot_select_conflict_status() -> None:
+    assert ORDER_STATUS_CONFLICT not in order_status_options_for_row(
+        ORDER_STATUS_PLANNED
+    )
+
+
+def test_conflict_row_cannot_select_planned_status() -> None:
+    assert ORDER_STATUS_PLANNED not in order_status_options_for_row(
+        ORDER_STATUS_CONFLICT
+    )
+
+
+def test_status_overrides_are_applied_per_row() -> None:
+    rows = [
+        {"ID": 1, "Статус": ORDER_STATUS_NEW},
+        {"ID": 2, "Статус": ORDER_STATUS_PLANNED},
+    ]
+
+    edited = apply_order_status_overrides(
+        rows, {0: ORDER_STATUS_CANCELLED, 1: ORDER_STATUS_NEW}
+    )
+
+    assert edited[0]["Статус"] == ORDER_STATUS_CANCELLED
+    assert edited[1]["Статус"] == ORDER_STATUS_NEW
+    assert rows[0]["Статус"] == ORDER_STATUS_NEW
 
 
 def test_order_editor_rows_include_selection_and_editable_fields() -> None:
@@ -528,12 +596,15 @@ def test_validate_existing_order_allows_only_manual_statuses() -> None:
         "Маршрут": "наша сборка",
     }
     for status in (ORDER_STATUS_NEW, ORDER_STATUS_CANCELLED):
-        assert validate_order_editor_row(
-            {**base, "Статус": status},
-            route_names={"наша сборка"},
-            existing_numbers={"N-1": 1},
-            current_order_id=1,
-        ) == []
+        assert (
+            validate_order_editor_row(
+                {**base, "Статус": status},
+                route_names={"наша сборка"},
+                existing_numbers={"N-1": 1},
+                current_order_id=1,
+            )
+            == []
+        )
     for status in (ORDER_STATUS_PLANNED, ORDER_STATUS_CONFLICT):
         errors = validate_order_editor_row(
             {**base, "Статус": status},
@@ -572,3 +643,94 @@ def test_route_capacity_cache_uses_planning_data_version(monkeypatch) -> None:
         )
         is None
     )
+
+
+def test_can_change_quantity_for_planned_order_without_manual_status_change(
+    monkeypatch,
+) -> None:
+    import app.ui.pages.orders_page as orders_page
+
+    fake_st = _FakeStreamlit()
+    repository = _FakeOrdersRepository()
+    session = _FakeSession()
+    recalculations = []
+    order = _order()
+    order.status = ORDER_STATUS_PLANNED
+    edited_row = {**_order_row(order), "Тираж": 1700.0}
+
+    monkeypatch.setattr(orders_page, "st", fake_st)
+    monkeypatch.setattr(
+        orders_page,
+        "recalculate_after_save",
+        lambda session: recalculations.append(session),
+    )
+
+    with pytest.raises(_RerunRequested):
+        orders_page._process_editor_changes(
+            session,
+            repository,
+            [order],
+            [edited_row],
+            {order.route.name: order.route},
+            save_requested=True,
+        )
+
+    assert repository.updated[0][1]["quantity"] == 1700.0
+    assert repository.updated[0][1]["status"] == ORDER_STATUS_NEW
+    assert recalculations == [session]
+
+
+def test_can_change_conflict_order_data_without_manual_status_change(
+    monkeypatch,
+) -> None:
+    import app.ui.pages.orders_page as orders_page
+
+    fake_st = _FakeStreamlit()
+    repository = _FakeOrdersRepository()
+    session = _FakeSession()
+    recalculations = []
+    order = _order()
+    order.status = ORDER_STATUS_CONFLICT
+    edited_row = {**_order_row(order), "Клиент": "Новый клиент"}
+
+    monkeypatch.setattr(orders_page, "st", fake_st)
+    monkeypatch.setattr(
+        orders_page,
+        "recalculate_after_save",
+        lambda session: recalculations.append(session),
+    )
+
+    with pytest.raises(_RerunRequested):
+        orders_page._process_editor_changes(
+            session,
+            repository,
+            [order],
+            [edited_row],
+            {order.route.name: order.route},
+            save_requested=True,
+        )
+
+    assert repository.updated[0][1]["client_name"] == "Новый клиент"
+    assert repository.updated[0][1]["status"] == ORDER_STATUS_NEW
+    assert recalculations == [session]
+
+
+def test_editor_signature_changes_after_recalculated_status_update() -> None:
+    route = Route(id=1, name="маршрут")
+    order = _order(route)
+    order.status = ORDER_STATUS_NEW
+    rows_before = build_order_editor_rows(
+        [order], selected_order_id=None, include_draft=False
+    )
+    order.status = ORDER_STATUS_PLANNED
+    order.calculated_start_date = date(2026, 7, 8)
+    rows_after = build_order_editor_rows(
+        [order], selected_order_id=None, include_draft=False
+    )
+
+    import app.ui.pages.orders_page as orders_page
+
+    assert orders_page._order_editor_rows_signature(
+        rows_before
+    ) != orders_page._order_editor_rows_signature(rows_after)
+    assert rows_after[0]["Статус"] == ORDER_STATUS_PLANNED
