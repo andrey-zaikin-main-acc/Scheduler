@@ -8,8 +8,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.constants import (
+    CALCULATED_ORDER_STATUSES,
     MANUAL_ORDER_STATUSES,
-    ORDER_STATUSES,
     ORDER_STATUS_NEW,
 )
 from app.db.database import SessionLocal
@@ -134,7 +134,7 @@ def render_orders_page() -> None:
             key=ORDER_EDITOR_KEY,
             use_container_width=True,
             hide_index=True,
-            disabled=["ID", "Конфликт", "Дата запуска"],
+            disabled=["ID", "Конфликт", "Дата запуска", "Статус"],
             column_order=EDITOR_COLUMNS,
             num_rows="fixed",
             column_config={
@@ -151,12 +151,13 @@ def render_orders_page() -> None:
                 "Маршрут": st.column_config.SelectboxColumn(
                     "Маршрут", options=list(route_by_name)
                 ),
-                "Статус": st.column_config.SelectboxColumn(
+                "Статус": st.column_config.TextColumn(
                     "Статус",
-                    options=list(MANUAL_ORDER_STATUSES),
+                    disabled=True,
                     help=(
-                        "Вручную можно выбрать только «Новый» или «Отменён». "
-                        "«Запланирован» и «Конфликт планирования» назначаются системой после пересчёта."
+                        "Текущий статус отображается в таблице. "
+                        "Ручное изменение статуса выполняется в отдельных списках ниже таблицы: "
+                        "можно выбрать только «Новый» или «Отменён», а расчётные статусы назначаются системой после пересчёта."
                     ),
                 ),
                 # Дата запуска рассчитывается планировщиком при пересчёте плана, поэтому ручное редактирование отключено.
@@ -166,6 +167,8 @@ def render_orders_page() -> None:
                 "Конфликт": st.column_config.CheckboxColumn("Конфликт", disabled=True),
             },
         )
+        status_overrides = render_order_status_selectors(edited_rows)
+        edited_rows = apply_order_status_overrides(edited_rows, status_overrides)
         save_requested = st.button(
             "Сохранить изменения и пересчитать план",
             use_container_width=True,
@@ -198,6 +201,52 @@ def _order_editor_rows_signature(
     """Return a stable signature for persisted order data, excluding UI selection."""
     data_columns = [column for column in EDITOR_COLUMNS if column != "Выбран"]
     return tuple(tuple(row.get(column) for column in data_columns) for row in rows)
+
+
+def order_status_options_for_row(status: str) -> list[str]:
+    """Return row-specific manual status choices with current calculated status visible."""
+    if status in CALCULATED_ORDER_STATUSES:
+        return [status, *MANUAL_ORDER_STATUSES]
+    if status == ORDER_STATUS_NEW:
+        return list(MANUAL_ORDER_STATUSES)
+    if status in MANUAL_ORDER_STATUSES:
+        return [
+            status,
+            *[option for option in MANUAL_ORDER_STATUSES if option != status],
+        ]
+    return list(MANUAL_ORDER_STATUSES)
+
+
+def render_order_status_selectors(rows: list[dict[str, Any]]) -> dict[int, str]:
+    """Render per-row status selectboxes because data_editor has column-wide options only."""
+    if not rows:
+        return {}
+    st.caption(
+        "Ручное изменение статусов: расчётный статус показан только как текущее значение строки; вручную доступны «Новый» и «Отменён»."
+    )
+    overrides: dict[int, str] = {}
+    for index, row in enumerate(rows):
+        current_status = str(row.get("Статус") or ORDER_STATUS_NEW)
+        options = order_status_options_for_row(current_status)
+        order_label = row.get("Номер") or "новый заказ"
+        overrides[index] = st.selectbox(
+            f"Статус заказа {order_label}",
+            options=options,
+            index=options.index(current_status) if current_status in options else 0,
+            key=f"orders_page_status_{row.get('ID') or f'draft_{index}'}",
+            help="Системные статусы нельзя назначить вручную; они обновятся после пересчёта.",
+        )
+    return overrides
+
+
+def apply_order_status_overrides(
+    rows: list[dict[str, Any]], overrides: dict[int, str]
+) -> list[dict[str, Any]]:
+    """Apply status values selected in row-specific controls to edited table rows."""
+    return [
+        {**row, "Статус": overrides.get(index, row.get("Статус"))}
+        for index, row in enumerate(rows)
+    ]
 
 
 def build_order_editor_rows(
@@ -233,6 +282,7 @@ def validate_order_editor_row(
     route_names: set[str],
     existing_numbers: dict[str, int],
     current_order_id: int | None,
+    original_status: str | None = None,
 ) -> list[str]:
     """Validate an edited order table row."""
     errors: list[str] = []
@@ -260,7 +310,11 @@ def validate_order_editor_row(
         errors.append("Маршрут обязателен.")
     if current_order_id is None and status != ORDER_STATUS_NEW:
         errors.append("Новый заказ можно создать только со статусом «Новый».")
-    elif current_order_id is not None and status not in MANUAL_ORDER_STATUSES:
+    elif (
+        current_order_id is not None
+        and status not in MANUAL_ORDER_STATUSES
+        and not (status == original_status and status in CALCULATED_ORDER_STATUSES)
+    ):
         errors.append("Вручную можно назначить только статус «Новый» или «Отменён».")
     return errors
 
@@ -320,13 +374,17 @@ def _process_editor_changes(
                 route_names=set(route_by_name),
                 existing_numbers=existing_numbers,
                 current_order_id=order.id,
+                original_status=order.status,
             )
             if errors:
                 for error in errors:
                     st.error(error)
                 return
             repository.update_order(
-                order.id, **_row_to_order_payload(row, route_by_name)
+                order.id,
+                **_row_to_order_payload(
+                    row, route_by_name, original_status=order.status
+                ),
             )
             saved_changes = True
 
@@ -339,8 +397,14 @@ def _process_editor_changes(
 
 
 def _row_to_order_payload(
-    row: dict[str, Any], route_by_name: dict[str, Route]
+    row: dict[str, Any],
+    route_by_name: dict[str, Route],
+    *,
+    original_status: str | None = None,
 ) -> dict[str, Any]:
+    status = str(row["Статус"])
+    if status == original_status and status in CALCULATED_ORDER_STATUSES:
+        status = ORDER_STATUS_NEW
     return {
         "order_number": str(row["Номер"]).strip(),
         "client_name": str(row["Клиент"]).strip(),
@@ -348,7 +412,7 @@ def _row_to_order_payload(
         "quantity": float(row["Тираж"]),
         "shipment_date": row["Срок отгрузки"],
         "route_id": route_by_name[str(row["Маршрут"])].id,
-        "status": str(row["Статус"]),
+        "status": status,
     }
 
 
