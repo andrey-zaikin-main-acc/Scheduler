@@ -40,6 +40,10 @@ class CapacityCalendar:
         self._daily_capacity_cache: dict[tuple[int, date], float] = {}
         self._history: list[tuple[tuple[int, date], float, CapacityReservation]] = []
 
+    def work_center(self, work_center_id: int) -> PlanningWorkCenter:
+        """Return planning work center by id."""
+        return self._get_work_center(work_center_id)
+
     def available_hours(self, work_center_id: int, day: date) -> float:
         """Return daily available capacity for a work center on a calendar date.
 

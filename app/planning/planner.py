@@ -101,13 +101,13 @@ class PlanningEngine:
         if best_result is not None:
             return best_result
         if last_conflict is not None:
+            reason = last_conflict.reason
+            if "непрерывно разместить" not in reason:
+                reason = "Невозможно разместить потоковый заказ до даты отгрузки после попытки оптимизации расписания."
             return PlannedOrderResult(
                 order_id=order.id,
                 calculated_start_date=None,
-                conflict=replace(
-                    last_conflict,
-                    reason="Невозможно разместить потоковый заказ до даты отгрузки после попытки оптимизации расписания.",
-                ),
+                conflict=replace(last_conflict, reason=reason),
             )
         first_requirement = prepared_order.requirements[0]
         available_hours = self.capacity_calendar.total_free_hours(
@@ -156,6 +156,34 @@ class PlanningEngine:
             previous_batch_finish: datetime | None = None
             next_incoming_ready: list[tuple[float, datetime, bool]] = []
 
+            work_center = self.capacity_calendar.work_center(
+                route_operation.work_center_id
+            )
+            if work_center.prevent_order_interruption and len(operation_batches) > 1:
+                block_result = self._place_uninterrupted_operation_batches(
+                    order_id=order.id,
+                    shipment_date=order.shipment_date,
+                    route_operation=route_operation,
+                    operation_batches=operation_batches,
+                )
+                if isinstance(block_result, PlanningConflict):
+                    return block_result
+                placed_operations.extend(block_result)
+                next_incoming_ready.extend(
+                    (
+                        (
+                            batch_quantity,
+                            max(day.end_datetime for day in scheduled.days),
+                            is_last_batch,
+                        )
+                        for scheduled, (batch_quantity, _, is_last_batch) in zip(
+                            block_result, operation_batches, strict=True
+                        )
+                    )
+                )
+                incoming_ready = next_incoming_ready
+                continue
+
             for batch_quantity, input_ready, is_last_batch in operation_batches:
                 batch_hours = (
                     batch_quantity * route_operation.labor_hours_per_1000 / 1000
@@ -203,6 +231,93 @@ class PlanningEngine:
             order_id=order.id,
             calculated_start_date=calculated_start_date,
             operations=tuple(placed_operations),
+        )
+
+    def _place_uninterrupted_operation_batches(
+        self,
+        *,
+        order_id: int,
+        shipment_date: date,
+        route_operation: PlanningRouteOperation,
+        operation_batches: list[tuple[float, datetime, bool]],
+    ) -> list[ScheduledOperation] | PlanningConflict:
+        """Place all batches of one protected route operation as one uninterrupted block."""
+        batch_specs = [
+            (quantity, ready, quantity * route_operation.labor_hours_per_1000 / 1000)
+            for quantity, ready, _ in operation_batches
+        ]
+        total_hours = sum(hours for _, _, hours in batch_specs)
+        candidate = max(ready for _, ready, _ in batch_specs[:1])
+        deadline = self._shipment_deadline(route_operation, shipment_date)
+
+        while candidate <= deadline:
+            start = self.capacity_calendar.find_earliest_contiguous_start(
+                route_operation.work_center_id, candidate, total_hours
+            )
+            if start > deadline:
+                break
+            snapshot = self.capacity_calendar.snapshot()
+            cursor = start
+            scheduled_operations: list[ScheduledOperation] = []
+            readiness_violation: datetime | None = None
+            try:
+                for batch_quantity, input_ready, batch_hours in batch_specs:
+                    if input_ready > cursor:
+                        readiness_violation = input_ready
+                        break
+                    scheduled_days = self.capacity_calendar.reserve_contiguous_forward(
+                        order_id=order_id,
+                        work_center_id=route_operation.work_center_id,
+                        start_datetime=cursor,
+                        hours=batch_hours,
+                        quantity_part=batch_quantity,
+                    )
+                    cursor = max(day.end_datetime for day in scheduled_days)
+                    scheduled_operations.append(
+                        ScheduledOperation(
+                            order_id=order_id,
+                            route_operation_id=route_operation.id,
+                            work_center_id=route_operation.work_center_id,
+                            sequence_number=route_operation.sequence_number,
+                            required_hours=batch_hours,
+                            planned_hours=sum(day.hours for day in scheduled_days),
+                            planned_start_date=min(day.date for day in scheduled_days),
+                            planned_end_date=max(day.date for day in scheduled_days),
+                            days=tuple(scheduled_days),
+                        )
+                    )
+            except ValueError:
+                self.capacity_calendar.restore(snapshot)
+                candidate = start + timedelta(minutes=1)
+                continue
+
+            if readiness_violation is not None:
+                self.capacity_calendar.restore(snapshot)
+                candidate = max(readiness_violation, start + timedelta(minutes=1))
+                continue
+            if cursor <= deadline:
+                return scheduled_operations
+            self.capacity_calendar.restore(snapshot)
+            break
+
+        available_hours = self.capacity_calendar.total_free_hours(
+            work_center_id=route_operation.work_center_id,
+            start_date=self._earliest_allowed_date(shipment_date),
+            end_date=shipment_date,
+        )
+        return PlanningConflict(
+            order_id=order_id,
+            shipment_date=shipment_date,
+            work_center_id=route_operation.work_center_id,
+            required_hours=total_hours,
+            available_hours=available_hours,
+            deficit_hours=max(0.0, total_hours - available_hours),
+            blocking_order_ids=self.capacity_calendar.blocking_order_ids(
+                work_center_id=route_operation.work_center_id,
+                start_date=self._earliest_allowed_date(shipment_date),
+                end_date=shipment_date,
+            ),
+            reason=f"Заказ невозможно непрерывно разместить на участке «{route_operation.work_center_name}» до даты отгрузки.",
         )
 
     def _calculate_relative_flow_duration_hours(

@@ -18,6 +18,7 @@ EDITOR_COLUMNS = [
     "Доступное время в месяц",
     "Время начала рабочего дня",
     "Активен",
+    "Нельзя прерывать заказ при планировании",
 ]
 DRAFT_ROW_SESSION_KEY = "work_centers_page_has_draft_row"
 SELECTED_ROW_SESSION_KEY = "work_centers_page_selected_id"
@@ -87,6 +88,9 @@ def render_work_centers_page() -> None:
                     "Доступное время в месяц", min_value=0.01, step=0.5
                 ),
                 "Активен": st.column_config.CheckboxColumn("Активен"),
+                "Нельзя прерывать заказ при планировании": st.column_config.CheckboxColumn(
+                    "Нельзя прерывать заказ при планировании"
+                ),
             },
         )
         _process_editor_changes(session, repository, work_centers, edited_rows)
@@ -108,6 +112,7 @@ def build_work_center_editor_rows(
                 "Доступное время в месяц": 0.0,
                 "Время начала рабочего дня": "09:00",
                 "Активен": True,
+                "Нельзя прерывать заказ при планировании": False,
             }
         )
     return rows
@@ -130,6 +135,8 @@ def validate_work_center_row(
         errors.append("Время начала рабочего дня должно быть в формате HH:MM.")
     if not isinstance(row.get("Активен"), bool):
         errors.append("Активность участка должна быть булевым значением.")
+    if not isinstance(row.get("Нельзя прерывать заказ при планировании"), bool):
+        errors.append("Запрет прерывания заказа должен быть булевым значением.")
     return errors
 
 
@@ -193,6 +200,9 @@ def _row_to_payload(row: dict[str, Any]) -> dict[str, Any]:
         "workday_start_time": _parse_time(row["Время начала рабочего дня"])
         or time(hour=9),
         "is_active": bool(row["Активен"]),
+        "prevent_order_interruption": bool(
+            row["Нельзя прерывать заказ при планировании"]
+        ),
     }
 
 
@@ -205,6 +215,8 @@ def _row_changed(row: dict[str, Any], item: WorkCenter) -> bool:
             _parse_time(row.get("Время начала рабочего дня"))
             != item.workday_start_time,
             bool(row.get("Активен")) != item.is_active,
+            bool(row.get("Нельзя прерывать заказ при планировании"))
+            != item.prevent_order_interruption,
         ]
     )
 

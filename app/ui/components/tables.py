@@ -41,6 +41,7 @@ def work_center_rows(work_centers: list[WorkCenter]) -> list[dict[str, object]]:
             "Доступное время в месяц": item.available_hours_per_day,
             "Время начала рабочего дня": item.workday_start_time.strftime("%H:%M"),
             "Активен": item.is_active,
+            "Нельзя прерывать заказ при планировании": item.prevent_order_interruption,
         }
         for item in work_centers
     ]

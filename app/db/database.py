@@ -26,6 +26,7 @@ def create_all() -> None:
     ensure_data_dir()
     Base.metadata.create_all(bind=engine)
     _ensure_work_center_workday_start_time_column()
+    _ensure_work_center_prevent_order_interruption_column()
     _ensure_planned_operation_day_intraday_columns()
 
 
@@ -64,6 +65,29 @@ def _ensure_work_center_workday_start_time_column() -> None:
             text(
                 "UPDATE work_centers "
                 "SET workday_start_time = COALESCE(workday_start_time, '09:00:00')"
+            )
+        )
+
+
+def _ensure_work_center_prevent_order_interruption_column() -> None:
+    """Add order-interruption protection flag to existing SQLite databases."""
+    inspector = inspect(engine)
+    if "work_centers" not in inspector.get_table_names():
+        return
+    existing_columns = {column["name"] for column in inspector.get_columns("work_centers")}
+    if "prevent_order_interruption" in existing_columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE work_centers "
+                "ADD COLUMN prevent_order_interruption BOOLEAN NOT NULL DEFAULT 0"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE work_centers "
+                "SET prevent_order_interruption = COALESCE(prevent_order_interruption, 0)"
             )
         )
 

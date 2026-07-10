@@ -211,3 +211,42 @@ def test_repository_rejects_manual_calculated_status(session):
         return
     with pytest.raises(ValueError):
         OrdersRepository(session).update_status(order.id, ORDER_STATUS_PLANNED)
+
+
+def test_work_center_prevent_order_interruption_is_saved_and_mapped(session: Session) -> None:
+    work_centers = WorkCentersRepository(session)
+
+    created = work_centers.create_work_center(
+        name="Защищенный участок",
+        available_hours_per_day=8,
+        prevent_order_interruption=True,
+    )
+    session.commit()
+    work_centers.update_work_center(
+        created.id,
+        name="Защищенный участок",
+        available_hours_per_day=8,
+        workday_start_time=created.workday_start_time,
+        is_active=True,
+        prevent_order_interruption=False,
+    )
+    session.commit()
+
+    loaded = session.get(WorkCenter, created.id)
+    assert loaded is not None
+    assert loaded.prevent_order_interruption is False
+
+    from app.services.planning_mapper import map_work_center_to_planning
+
+    mapped = map_work_center_to_planning(loaded)
+    assert mapped.prevent_order_interruption is False
+
+
+def test_new_work_center_prevent_order_interruption_default_is_false(session: Session) -> None:
+    work_center = WorkCenter(name="Обычный участок", available_hours_per_day=8)
+    session.add(work_center)
+    session.commit()
+
+    loaded = session.get(WorkCenter, work_center.id)
+    assert loaded is not None
+    assert loaded.prevent_order_interruption is False
