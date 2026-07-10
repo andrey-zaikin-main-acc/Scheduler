@@ -200,3 +200,14 @@ def test_orders_repository_delete_order_clears_related_plan_data(session: Sessio
     assert session.query(PlannedOperationDay).count() == 0
     assert session.query(PlanningConflict).count() == 0
     assert session.query(PlanChange).count() == 0
+
+
+def test_repository_rejects_manual_calculated_status(session):
+    from app.constants import ORDER_STATUS_PLANNED
+    from app.repositories.orders_repository import OrdersRepository
+
+    order = session.query(Order).first()
+    if order is None:
+        return
+    with pytest.raises(ValueError):
+        OrdersRepository(session).update_status(order.id, ORDER_STATUS_PLANNED)

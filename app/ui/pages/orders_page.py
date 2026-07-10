@@ -8,12 +8,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.constants import (
-    ORDER_STATUS_CANCELLED,
-    ORDER_STATUS_CONFLICT,
-    ORDER_STATUS_DONE,
+    MANUAL_ORDER_STATUSES,
+    ORDER_STATUSES,
     ORDER_STATUS_NEW,
-    ORDER_STATUS_NOT_DONE,
-    ORDER_STATUS_PLANNED,
 )
 from app.db.database import SessionLocal
 from app.db.models import Order, RecalculationRun, Route, RouteOperation, WorkCenter
@@ -22,14 +19,6 @@ from app.services.route_capacity_service import RouteCapacityService
 from app.ui.components.tables import order_rows
 from app.ui.pages.page_utils import recalculate_after_save
 
-ORDER_STATUSES = [
-    ORDER_STATUS_NEW,
-    ORDER_STATUS_PLANNED,
-    ORDER_STATUS_DONE,
-    ORDER_STATUS_NOT_DONE,
-    ORDER_STATUS_CONFLICT,
-    ORDER_STATUS_CANCELLED,
-]
 EDITOR_COLUMNS = [
     "Выбран",
     "ID",
@@ -47,7 +36,7 @@ DRAFT_ORDER_SESSION_KEY = "orders_page_show_draft_row"
 SELECTED_ORDER_SESSION_KEY = "orders_page_selected_order_id"
 ORDER_EDITOR_KEY = "orders_page_editor"
 
-ORDER_EDITOR_COLUMNS = [
+ORDER_EEDITOR_COLUMNS = [
     "Выбран",
     "ID",
     "Номер",
@@ -73,7 +62,7 @@ def render_orders_page() -> None:
     """Render the orders registry with inline editing controls."""
     st.header("Реестр заказов")
     st.caption(
-        "Редактируйте значения прямо в таблице. Изменения сохраняются только после нажатия кнопки «Сохранить изменения»."
+        "Редактируйте значения прямо в таблице. После нажатия кнопки «Сохранить изменения и пересчитать план» изменения сохраняются в реестре, затем запускается пересчёт производственного плана. Открытие страницы, выбор строки и редактирование ячеек без этой кнопки ничего не сохраняют и не пересчитывают."
     )
 
     with SessionLocal() as session:
@@ -163,7 +152,12 @@ def render_orders_page() -> None:
                     "Маршрут", options=list(route_by_name)
                 ),
                 "Статус": st.column_config.SelectboxColumn(
-                    "Статус", options=ORDER_STATUSES
+                    "Статус",
+                    options=list(MANUAL_ORDER_STATUSES),
+                    help=(
+                        "Вручную можно выбрать только «Новый» или «Отменён». "
+                        "«Запланирован» и «Конфликт планирования» назначаются системой после пересчёта."
+                    ),
                 ),
                 # Дата запуска рассчитывается планировщиком при пересчёте плана, поэтому ручное редактирование отключено.
                 "Дата запуска": st.column_config.DateColumn(
@@ -173,7 +167,7 @@ def render_orders_page() -> None:
             },
         )
         save_requested = st.button(
-            "Сохранить изменения",
+            "Сохранить изменения и пересчитать план",
             use_container_width=True,
             disabled=not routes,
         )
@@ -264,8 +258,10 @@ def validate_order_editor_row(
         errors.append("Срок отгрузки обязателен.")
     if not route_name or route_name not in route_names:
         errors.append("Маршрут обязателен.")
-    if status not in ORDER_STATUSES:
-        errors.append("Статус обязателен.")
+    if current_order_id is None and status != ORDER_STATUS_NEW:
+        errors.append("Новый заказ можно создать только со статусом «Новый».")
+    elif current_order_id is not None and status not in MANUAL_ORDER_STATUSES:
+        errors.append("Вручную можно назначить только статус «Новый» или «Отменён».")
     return errors
 
 

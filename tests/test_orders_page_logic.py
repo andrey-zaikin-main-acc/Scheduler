@@ -3,7 +3,7 @@ from datetime import date, timedelta
 import pytest
 
 pytest.importorskip("streamlit")
-from app.constants import ORDER_STATUS_NEW, ORDER_STATUS_PLANNED
+from app.constants import ORDER_STATUS_CANCELLED, ORDER_STATUS_CONFLICT, ORDER_STATUS_NEW, ORDER_STATUS_PLANNED, MANUAL_ORDER_STATUSES
 from app.db.models import Order, Route
 from app.ui.pages.orders_page import build_order_editor_rows, validate_order_editor_row
 
@@ -274,7 +274,7 @@ def test_save_changed_planning_fields_updates_and_recalculates_once(
         "Тираж": 1500.0,
         "Срок отгрузки": date(2026, 7, 15),
         "Маршрут": new_route.name,
-        "Статус": ORDER_STATUS_PLANNED,
+        "Статус": ORDER_STATUS_NEW,
     }
 
     monkeypatch.setattr(orders_page, "st", fake_st)
@@ -299,7 +299,7 @@ def test_save_changed_planning_fields_updates_and_recalculates_once(
     assert repository.updated[0][1]["quantity"] == 1500.0
     assert repository.updated[0][1]["shipment_date"] == date(2026, 7, 15)
     assert repository.updated[0][1]["route_id"] == new_route.id
-    assert repository.updated[0][1]["status"] == ORDER_STATUS_PLANNED
+    assert repository.updated[0][1]["status"] == ORDER_STATUS_NEW
     assert session.commits == 1
     assert recalculations == [session]
 
@@ -488,11 +488,60 @@ def test_zero_quantity_stops_before_slot_service(monkeypatch) -> None:
     assert "Тираж должен быть больше 0" in fake_st.error_messages
 
 
-def test_save_button_is_not_primary() -> None:
+def test_save_button_is_renamed_and_not_primary() -> None:
     source = __import__("pathlib").Path("app/ui/pages/orders_page.py").read_text()
     save_call = source.split("save_requested = st.button(", 1)[1].split(")", 1)[0]
-    assert '"Сохранить изменения"' in save_call
+    assert '"Сохранить изменения и пересчитать план"' in save_call
     assert 'type="primary"' not in save_call
+
+
+def test_manual_status_options_only_include_new_and_cancelled() -> None:
+    assert MANUAL_ORDER_STATUSES == (ORDER_STATUS_NEW, ORDER_STATUS_CANCELLED)
+
+
+def test_validate_new_order_rejects_calculated_statuses() -> None:
+    base = {
+        "Номер": "N-1",
+        "Клиент": "Клиент",
+        "Продукция": "Продукт",
+        "Тираж": 1000,
+        "Срок отгрузки": date(2026, 7, 10),
+        "Маршрут": "наша сборка",
+    }
+    for status in (ORDER_STATUS_PLANNED, ORDER_STATUS_CONFLICT, ORDER_STATUS_CANCELLED):
+        errors = validate_order_editor_row(
+            {**base, "Статус": status},
+            route_names={"наша сборка"},
+            existing_numbers={},
+            current_order_id=None,
+        )
+        assert "Новый заказ можно создать только со статусом «Новый»." in errors
+
+
+def test_validate_existing_order_allows_only_manual_statuses() -> None:
+    base = {
+        "Номер": "N-1",
+        "Клиент": "Клиент",
+        "Продукция": "Продукт",
+        "Тираж": 1000,
+        "Срок отгрузки": date(2026, 7, 10),
+        "Маршрут": "наша сборка",
+    }
+    for status in (ORDER_STATUS_NEW, ORDER_STATUS_CANCELLED):
+        assert validate_order_editor_row(
+            {**base, "Статус": status},
+            route_names={"наша сборка"},
+            existing_numbers={"N-1": 1},
+            current_order_id=1,
+        ) == []
+    for status in (ORDER_STATUS_PLANNED, ORDER_STATUS_CONFLICT):
+        errors = validate_order_editor_row(
+            {**base, "Статус": status},
+            route_names={"наша сборка"},
+            existing_numbers={"N-1": 1},
+            current_order_id=1,
+        )
+        assert "Вручную можно назначить только статус «Новый» или «Отменён»." in errors
 
 
 def test_route_capacity_cache_uses_planning_data_version(monkeypatch) -> None:

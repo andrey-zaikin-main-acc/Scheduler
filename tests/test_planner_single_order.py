@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from app.constants import ORDER_STATUS_DONE, ORDER_STATUS_NEW
+from app.constants import ORDER_STATUS_CANCELLED, ORDER_STATUS_NEW
 from app.planning.capacity_calendar import CapacityCalendar
 from app.planning.entities import (
     PlanningOrder,
@@ -60,7 +60,7 @@ def test_planning_engine_returns_conflict_for_non_plannable_status() -> None:
         capacity_calendar=calendar, planning_start_date=date(2026, 7, 1)
     )
     order = PlanningOrder(
-        id=101, quantity=1000, shipment_date=date(2026, 7, 10), status=ORDER_STATUS_DONE
+        id=101, quantity=1000, shipment_date=date(2026, 7, 10), status=ORDER_STATUS_CANCELLED
     )
 
     result = engine.plan_order(order, [])

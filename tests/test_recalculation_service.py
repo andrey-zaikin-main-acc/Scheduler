@@ -249,7 +249,7 @@ def test_order_update_clears_stale_calculated_start_date_before_recalculation(
         quantity=1000,
         shipment_date=date(2026, 7, 1),
         route_id=route.id,
-        status=ORDER_STATUS_PLANNED,
+        status=ORDER_STATUS_NEW,
     )
 
     assert updated is not None
@@ -261,3 +261,69 @@ def test_order_update_clears_stale_calculated_start_date_before_recalculation(
 
     assert updated.status == ORDER_STATUS_PLANNED
     assert updated.calculated_start_date == date(2026, 7, 1)
+
+
+def test_cancelled_order_is_kept_but_excluded_from_recalculation(session: Session) -> None:
+    from app.constants import ORDER_STATUS_CANCELLED
+
+    route = create_route_with_operation(
+        session, hours_per_day=248, labor_hours_per_1000=8
+    )
+    order = Order(
+        order_number="R-CANCEL",
+        client_name="Клиент",
+        product_name="Продукт",
+        quantity=1000,
+        shipment_date=date(2026, 7, 10),
+        route_id=route.id,
+        status=ORDER_STATUS_CANCELLED,
+    )
+    session.add(order)
+    session.commit()
+
+    summary = RecalculationService(
+        session, planning_start_date=date(2026, 7, 1)
+    ).recalculate_plan()
+
+    assert summary.planned_orders == 0
+    assert summary.conflicts == 0
+    assert session.get(Order, order.id) is order
+    assert order.status == ORDER_STATUS_CANCELLED
+    assert session.query(PlannedOperation).filter_by(order_id=order.id).count() == 0
+    assert session.query(PlanningConflict).filter_by(order_id=order.id).count() == 0
+
+
+def test_conflicted_order_participates_again_and_can_become_planned(session: Session) -> None:
+    route = create_route_with_operation(
+        session, hours_per_day=248, labor_hours_per_1000=8
+    )
+    order = Order(
+        order_number="R-RETRY",
+        client_name="Клиент",
+        product_name="Продукт",
+        quantity=1000,
+        shipment_date=date(2026, 7, 10),
+        route_id=route.id,
+        status=ORDER_STATUS_CONFLICT,
+    )
+    session.add(order)
+    session.commit()
+
+    RecalculationService(session, planning_start_date=date(2026, 7, 1)).recalculate_plan()
+
+    assert order.status == ORDER_STATUS_PLANNED
+    assert session.query(PlannedOperation).filter_by(order_id=order.id).count() == 1
+
+
+def test_planned_orders_are_sorted_before_new_orders() -> None:
+    from app.planning.entities import PlanningOrder
+    from app.planning.order_preparation import PreparedOrder, sort_prepared_orders
+
+    planned = PreparedOrder(
+        PlanningOrder(2, 1000, date(2026, 7, 20), ORDER_STATUS_PLANNED), (), 0
+    )
+    new = PreparedOrder(
+        PlanningOrder(1, 1000, date(2026, 7, 10), ORDER_STATUS_NEW), (), 0
+    )
+
+    assert sort_prepared_orders([new, planned]) == (planned, new)

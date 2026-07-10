@@ -6,6 +6,7 @@ from datetime import date
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.constants import MANUAL_ORDER_STATUSES, ORDER_STATUS_NEW
 from app.db.models import (
     Order,
     PlanChange,
@@ -46,9 +47,11 @@ class OrdersRepository:
         quantity: float,
         shipment_date: date,
         route_id: int,
-        status: str,
+        status: str = ORDER_STATUS_NEW,
     ) -> Order:
         """Create and persist an order."""
+        if status != ORDER_STATUS_NEW:
+            raise ValueError("New orders can only be created with status 'Новый'.")
         order = Order(
             order_number=order_number,
             client_name=client_name,
@@ -67,6 +70,7 @@ class OrdersRepository:
         order = self.get_order(order_id)
         if order is None:
             return None
+        self._validate_manual_status(status)
         if order.status != status:
             order.calculated_start_date = None
         order.status = status
@@ -89,6 +93,7 @@ class OrdersRepository:
         order = self.get_order(order_id)
         if order is None:
             return None
+        self._validate_manual_status(status)
         planning_inputs_changed = (
             float(order.quantity) != float(quantity)
             or order.shipment_date != shipment_date
@@ -106,6 +111,11 @@ class OrdersRepository:
             order.calculated_start_date = None
         self.session.flush()
         return order
+
+    @staticmethod
+    def _validate_manual_status(status: str) -> None:
+        if status not in MANUAL_ORDER_STATUSES:
+            raise ValueError("Only statuses 'Новый' and 'Отменён' can be assigned manually.")
 
     def delete_order(self, order_id: int) -> bool:
         """Physically delete an order and all saved planning data tied to it."""
