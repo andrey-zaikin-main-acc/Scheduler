@@ -7,6 +7,7 @@ from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, Float, ForeignK
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
+from app.constants import PLANNING_MODE_SHIPMENT
 
 
 def utc_now() -> datetime:
@@ -25,6 +26,12 @@ class Order(Base):
     product_name: Mapped[str] = mapped_column(String(255), nullable=False)
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
     shipment_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    planning_mode: Mapped[str] = mapped_column(String(50), default=PLANNING_MODE_SHIPMENT, nullable=False, index=True)
+    fixed_start_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    child_group_key: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    child_sequence_number: Mapped[Optional[int]] = mapped_column(Integer)
+    is_child_order: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_linked_child_group: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     route_id: Mapped[int] = mapped_column(ForeignKey("routes.id"), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     calculated_start_date: Mapped[Optional[date]] = mapped_column(Date)

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.constants import (
+    PLANNING_MODE_START,
     ORDER_STATUS_NEW,
     ORDER_STATUS_PLANNED,
     PLANNABLE_ORDER_STATUSES,
@@ -221,6 +222,8 @@ class RecalculationService:
         misses_finish_deadline = (
             last_finish is None or last_finish.date() > order.shipment_date
         )
+        if order.planning_mode == PLANNING_MODE_START:
+            misses_finish_deadline = False
         if not misses_start_deadline and not misses_finish_deadline:
             return result
 
@@ -250,6 +253,8 @@ class RecalculationService:
     ) -> None:
         order.status = ORDER_STATUS_PLANNED
         order.calculated_start_date = result.calculated_start_date
+        if order.planning_mode == PLANNING_MODE_START and result.operations:
+            order.shipment_date = max(day.end_datetime for operation in result.operations for day in operation.days).date()
         for scheduled_operation in result.operations:
             planned_operation = map_scheduled_operation_to_orm(scheduled_operation)
             self.plan_repository.add_planned_operation(planned_operation)

@@ -12,6 +12,12 @@ class PlanningOrder:
     quantity: float
     shipment_date: date
     status: str
+    planning_mode: str = "От даты отгрузки"
+    fixed_start_date: date | None = None
+    child_group_key: str | None = None
+    child_sequence_number: int | None = None
+    is_child_order: bool = False
+    is_linked_child_group: bool = False
 
 
 @dataclass(frozen=True)

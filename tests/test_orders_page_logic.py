@@ -74,10 +74,13 @@ def test_order_editor_rows_include_selection_and_editable_fields() -> None:
         "Клиент": "Клиент",
         "Продукция": "Продукт",
         "Тираж": 1000,
+        "Режим планирования": "От даты отгрузки",
+        "Дата запуска": None,
         "Срок отгрузки": date(2026, 7, 10),
+        "Группа": "",
+        "Связанная группа": False,
         "Маршрут": "наша сборка",
         "Статус": ORDER_STATUS_NEW,
-        "Дата запуска": None,
         "Конфликт": False,
     }
     assert rows[1]["ID"] is None
@@ -90,7 +93,11 @@ def test_validate_order_editor_row_rejects_duplicate_order_number() -> None:
         "Клиент": "Клиент",
         "Продукция": "Продукт",
         "Тираж": 1000,
+        "Режим планирования": "От даты отгрузки",
+        "Дата запуска": None,
         "Срок отгрузки": date(2026, 7, 10),
+        "Группа": "",
+        "Связанная группа": False,
         "Маршрут": "наша сборка",
         "Статус": ORDER_STATUS_NEW,
     }
@@ -111,7 +118,11 @@ def test_validate_order_editor_row_accepts_current_order_number_on_update() -> N
         "Клиент": "Клиент",
         "Продукция": "Продукт",
         "Тираж": 1000,
+        "Режим планирования": "От даты отгрузки",
+        "Дата запуска": None,
         "Срок отгрузки": date(2026, 7, 10),
+        "Группа": "",
+        "Связанная группа": False,
         "Маршрут": "наша сборка",
         "Статус": ORDER_STATUS_NEW,
     }
@@ -548,7 +559,11 @@ def test_validate_new_order_rejects_calculated_statuses() -> None:
         "Клиент": "Клиент",
         "Продукция": "Продукт",
         "Тираж": 1000,
+        "Режим планирования": "От даты отгрузки",
+        "Дата запуска": None,
         "Срок отгрузки": date(2026, 7, 10),
+        "Группа": "",
+        "Связанная группа": False,
         "Маршрут": "наша сборка",
     }
     for status in (ORDER_STATUS_PLANNED, ORDER_STATUS_CANCELLED):
@@ -567,7 +582,11 @@ def test_validate_existing_order_allows_only_manual_statuses() -> None:
         "Клиент": "Клиент",
         "Продукция": "Продукт",
         "Тираж": 1000,
+        "Режим планирования": "От даты отгрузки",
+        "Дата запуска": None,
         "Срок отгрузки": date(2026, 7, 10),
+        "Группа": "",
+        "Связанная группа": False,
         "Маршрут": "наша сборка",
     }
     for status in (ORDER_STATUS_NEW, ORDER_STATUS_CANCELLED):

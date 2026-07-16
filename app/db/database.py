@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import DATA_DIR, DATABASE_URL
-from app.constants import ORDER_STATUS_NEW
+from app.constants import ORDER_STATUS_NEW, PLANNING_MODE_SHIPMENT
 
 
 class Base(DeclarativeBase):
@@ -32,6 +32,7 @@ def create_all() -> None:
     _ensure_work_center_prevent_order_interruption_column()
     _ensure_route_prevent_order_interruption_column()
     _ensure_planned_operation_day_intraday_columns()
+    _ensure_order_planning_columns()
     _migrate_legacy_conflict_order_status()
 
 
@@ -151,6 +152,41 @@ def _ensure_planned_operation_day_intraday_columns() -> None:
                     end_datetime = COALESCE(end_datetime, datetime(date || ' 09:00:00', '+' || hours || ' hours'))
                 """))
 
+
+
+def _ensure_order_planning_columns() -> None:
+    """Add planning-mode and child-order metadata to existing SQLite databases."""
+    inspector = inspect(engine)
+    if "orders" not in inspector.get_table_names():
+        return
+    existing_columns = {column["name"] for column in inspector.get_columns("orders")}
+    statements = []
+    if "planning_mode" not in existing_columns:
+        statements.append("ALTER TABLE orders ADD COLUMN planning_mode VARCHAR(50) NOT NULL DEFAULT 'От даты отгрузки'")
+    if "fixed_start_date" not in existing_columns:
+        statements.append("ALTER TABLE orders ADD COLUMN fixed_start_date DATE")
+    if "child_group_key" not in existing_columns:
+        statements.append("ALTER TABLE orders ADD COLUMN child_group_key VARCHAR(100)")
+    if "child_sequence_number" not in existing_columns:
+        statements.append("ALTER TABLE orders ADD COLUMN child_sequence_number INTEGER")
+    if "is_child_order" not in existing_columns:
+        statements.append("ALTER TABLE orders ADD COLUMN is_child_order BOOLEAN NOT NULL DEFAULT 0")
+    if "is_linked_child_group" not in existing_columns:
+        statements.append("ALTER TABLE orders ADD COLUMN is_linked_child_group BOOLEAN NOT NULL DEFAULT 0")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+        connection.execute(
+            text("""
+                UPDATE orders
+                SET planning_mode = COALESCE(planning_mode, :mode),
+                    is_child_order = COALESCE(is_child_order, 0),
+                    is_linked_child_group = COALESCE(is_linked_child_group, 0)
+                """),
+            {"mode": PLANNING_MODE_SHIPMENT},
+        )
 
 def _migrate_legacy_conflict_order_status() -> None:
     """Convert legacy conflict status rows to new status plus conflict record."""

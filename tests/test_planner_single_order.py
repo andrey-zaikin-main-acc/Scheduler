@@ -552,3 +552,35 @@ def test_failed_attempt_rollback_preserves_previous_conflict_blockers() -> None:
         start_date=date(2026, 7, 10),
         end_date=date(2026, 7, 10),
     ) == (301,)
+
+from datetime import datetime, time
+from app.constants import PLANNING_MODE_START
+
+
+def test_fixed_start_order_starts_strictly_at_workday_start() -> None:
+    calendar = CapacityCalendar([PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248)])
+    engine = PlanningEngine(calendar, planning_start_date=date(2026, 7, 1))
+    order = PlanningOrder(id=301, quantity=1000, shipment_date=date(2026, 7, 1), status=ORDER_STATUS_NEW, planning_mode=PLANNING_MODE_START, fixed_start_date=date(2026, 7, 6))
+    route_operations = (PlanningRouteOperation(id=1, sequence_number=1, work_center_id=1, work_center_name="Печать", labor_hours_per_1000=1),)
+
+    result = engine.plan_order(order, route_operations)
+
+    assert result.is_success
+    first_start = min(day.start_datetime for op in result.operations for day in op.days)
+    assert first_start == datetime.combine(date(2026, 7, 6), time.min)
+    assert result.calculated_start_date == date(2026, 7, 6)
+
+
+def test_fixed_start_order_conflicts_when_first_slot_is_busy() -> None:
+    calendar = CapacityCalendar([PlanningWorkCenter(id=1, name="Печать", available_hours_per_day=248)])
+    calendar.reserve_contiguous_forward(order_id=1, work_center_id=1, start_datetime=datetime.combine(date(2026, 7, 6), time.min), hours=1)
+    engine = PlanningEngine(calendar, planning_start_date=date(2026, 7, 1))
+    order = PlanningOrder(id=302, quantity=1000, shipment_date=date(2026, 7, 1), status=ORDER_STATUS_NEW, planning_mode=PLANNING_MODE_START, fixed_start_date=date(2026, 7, 6))
+    route_operations = (PlanningRouteOperation(id=1, sequence_number=1, work_center_id=1, work_center_name="Печать", labor_hours_per_1000=1),)
+
+    result = engine.plan_order(order, route_operations)
+
+    assert not result.is_success
+    assert result.conflict is not None
+    assert result.conflict.blocking_order_ids == (1,)
+    assert "фиксированную дату запуска" in result.conflict.reason

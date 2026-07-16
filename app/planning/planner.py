@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 
 from app.config import MAX_BACKWARD_SEARCH_MONTHS
+from app.constants import PLANNING_MODE_START
 from app.planning.capacity_calendar import CapacityCalendar
 from app.planning.entities import (
     PlannedOrderResult,
@@ -51,6 +52,8 @@ class PlanningEngine:
         order = prepared_order.order
         if not prepared_order.requirements:
             return self._invalid_order_result(order, "Route has no operations.")
+        if order.planning_mode == PLANNING_MODE_START:
+            return self.plan_prepared_order_from_fixed_start(prepared_order)
 
         latest_finish = self._shipment_deadline(
             prepared_order.requirements[-1].route_operation, order.shipment_date
@@ -135,6 +138,44 @@ class PlanningEngine:
                 reason="Недостаточно мощности для размещения партии или операции в допустимом окне без переноса отгрузки.",
             ),
         )
+
+
+    def plan_prepared_order_from_fixed_start(self, prepared_order: PreparedOrder) -> PlannedOrderResult:
+        """Plan a prepared order forward from its immutable fixed start date."""
+        order = prepared_order.order
+        if order.fixed_start_date is None:
+            return self._invalid_order_result(order, "Дата запуска обязательна для режима планирования от даты запуска.")
+        first_requirement = prepared_order.requirements[0]
+        fixed_start = self.capacity_calendar.workday_bounds(
+            first_requirement.route_operation.work_center_id, order.fixed_start_date
+        )[0]
+        batch_hours = order.quantity * first_requirement.route_operation.labor_hours_per_1000 / 1000
+        if not self.capacity_calendar._can_reserve_contiguous(
+            first_requirement.route_operation.work_center_id, fixed_start, batch_hours
+        ):
+            return PlannedOrderResult(
+                order_id=order.id,
+                calculated_start_date=None,
+                conflict=PlanningConflict(
+                    order_id=order.id,
+                    shipment_date=order.shipment_date,
+                    work_center_id=first_requirement.route_operation.work_center_id,
+                    required_hours=batch_hours,
+                    available_hours=self.capacity_calendar.free_hours(
+                        first_requirement.route_operation.work_center_id, order.fixed_start_date
+                    ),
+                    deficit_hours=max(0.0, batch_hours - self.capacity_calendar.free_hours(
+                        first_requirement.route_operation.work_center_id, order.fixed_start_date
+                    )),
+                    blocking_order_ids=self.capacity_calendar.blocking_order_ids(
+                        work_center_id=first_requirement.route_operation.work_center_id,
+                        start_date=order.fixed_start_date,
+                        end_date=order.fixed_start_date,
+                    ),
+                    reason="Первая операция не может начаться в фиксированную дату запуска из-за занятой мощности.",
+                ),
+            )
+        return self._try_place_forward_flow(prepared_order, fixed_start)
 
     def _try_place_forward_flow(
         self, prepared_order: PreparedOrder, first_operation_not_before: datetime
