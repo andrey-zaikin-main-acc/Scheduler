@@ -19,6 +19,12 @@ def map_order_to_planning(order: Order) -> PlanningOrder:
         quantity=order.quantity,
         shipment_date=order.shipment_date,
         status=order.status,
+        planning_mode=order.planning_mode,
+        fixed_start_date=order.fixed_start_date,
+        child_group_key=order.child_group_key,
+        child_sequence_number=order.child_sequence_number,
+        is_child_order=order.is_child_order,
+        is_linked_child_group=order.is_linked_child_group,
     )
 
 

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.constants import (
     CALCULATED_ORDER_STATUSES,
+    PLANNING_MODE_SHIPMENT,
     MANUAL_ORDER_STATUSES,
     ORDER_STATUS_CANCELLED,
     ORDER_STATUS_NEW,
@@ -53,6 +54,12 @@ class OrdersRepository:
         shipment_date: date,
         route_id: int,
         status: str = ORDER_STATUS_NEW,
+        planning_mode: str = PLANNING_MODE_SHIPMENT,
+        fixed_start_date: date | None = None,
+        child_group_key: str | None = None,
+        child_sequence_number: int | None = None,
+        is_child_order: bool = False,
+        is_linked_child_group: bool = False,
     ) -> Order:
         """Create and persist an order."""
         if status != ORDER_STATUS_NEW:
@@ -65,6 +72,12 @@ class OrdersRepository:
             shipment_date=shipment_date,
             route_id=route_id,
             status=status,
+            planning_mode=planning_mode,
+            fixed_start_date=fixed_start_date,
+            child_group_key=child_group_key,
+            child_sequence_number=child_sequence_number,
+            is_child_order=is_child_order,
+            is_linked_child_group=is_linked_child_group,
         )
         self.session.add(order)
         self.session.flush()
@@ -96,6 +109,12 @@ class OrdersRepository:
         shipment_date: date,
         route_id: int,
         status: str,
+        planning_mode: str = PLANNING_MODE_SHIPMENT,
+        fixed_start_date: date | None = None,
+        child_group_key: str | None = None,
+        child_sequence_number: int | None = None,
+        is_child_order: bool = False,
+        is_linked_child_group: bool = False,
     ) -> Order | None:
         """Update all editable order fields."""
         order = self.get_order(order_id)
@@ -108,6 +127,8 @@ class OrdersRepository:
             or order.shipment_date != shipment_date
             or order.route_id != route_id
             or order.status != status
+            or order.planning_mode != planning_mode
+            or order.fixed_start_date != fixed_start_date
         )
         order.order_number = order_number
         order.client_name = client_name
@@ -116,6 +137,12 @@ class OrdersRepository:
         order.shipment_date = shipment_date
         order.route_id = route_id
         order.status = status
+        order.planning_mode = planning_mode
+        order.fixed_start_date = fixed_start_date
+        order.child_group_key = child_group_key
+        order.child_sequence_number = child_sequence_number
+        order.is_child_order = is_child_order
+        order.is_linked_child_group = is_linked_child_group
         if planning_inputs_changed:
             order.calculated_start_date = None
         if status == ORDER_STATUS_CANCELLED:

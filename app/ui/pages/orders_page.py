@@ -11,6 +11,9 @@ from app.constants import (
     CALCULATED_ORDER_STATUSES,
     MANUAL_ORDER_STATUSES,
     ORDER_STATUSES,
+    PLANNING_MODE_SHIPMENT,
+    PLANNING_MODE_START,
+    PLANNING_MODES,
     ORDER_STATUS_NEW,
 )
 from app.db.database import SessionLocal
@@ -27,13 +30,16 @@ EDITOR_COLUMNS = [
     "Клиент",
     "Продукция",
     "Тираж",
+    "Режим планирования",
+    "Дата запуска",
     "Срок отгрузки",
+    "Группа",
+    "Связанная группа",
     "Маршрут",
     "Статус",
-    "Дата запуска",
     "Конфликт",
 ]
-DRAFT_ORDER_SESSION_KEY = "orders_page_show_draft_row"
+DRAFT_ORDER_SESSION_KEY = "orders_page_show_new_order_form"
 SELECTED_ORDER_SESSION_KEY = "orders_page_selected_order_id"
 ORDER_EDITOR_KEY = "orders_page_editor"
 
@@ -44,10 +50,13 @@ ORDER_EEDITOR_COLUMNS = [
     "Клиент",
     "Продукция",
     "Тираж",
+    "Режим планирования",
+    "Дата запуска",
     "Срок отгрузки",
+    "Группа",
+    "Связанная группа",
     "Маршрут",
     "Статус",
-    "Дата запуска",
     "Конфликт",
 ]
 
@@ -107,7 +116,6 @@ def render_orders_page() -> None:
                     _clear_route_capacity_cache()
                     recalculate_after_save(session)
                     st.session_state[SELECTED_ORDER_SESSION_KEY] = None
-                    st.session_state[DRAFT_ORDER_SESSION_KEY] = False
                     st.rerun()
                 st.error("Выбранный заказ не найден.")
 
@@ -118,9 +126,11 @@ def render_orders_page() -> None:
                 "Для добавления или редактирования заказа сначала создайте активный маршрут."
             )
 
-        include_draft = bool(st.session_state.get(DRAFT_ORDER_SESSION_KEY))
+        if bool(st.session_state.get(DRAFT_ORDER_SESSION_KEY)):
+            _render_new_order_form(session, repository, routes, route_by_name)
+
         rows = build_order_editor_rows(
-            orders, selected_order_id=selected_order_id, include_draft=include_draft
+            orders, selected_order_id=selected_order_id, include_draft=False
         )
         if not rows:
             st.info(
@@ -135,7 +145,7 @@ def render_orders_page() -> None:
             key=ORDER_EDITOR_KEY,
             use_container_width=True,
             hide_index=True,
-            disabled=["ID", "Конфликт", "Дата запуска"],
+            disabled=["ID", "Конфликт", "Группа", "Связанная группа"],
             column_order=EDITOR_COLUMNS,
             num_rows="fixed",
             column_config={
@@ -160,10 +170,10 @@ def render_orders_page() -> None:
                         "«Запланирован» назначается системой после пересчёта."
                     ),
                 ),
-                # Дата запуска рассчитывается планировщиком при пересчёте плана, поэтому ручное редактирование отключено.
-                "Дата запуска": st.column_config.DateColumn(
-                    "Дата запуска", disabled=True, format="DD.MM.YYYY"
-                ),
+                "Режим планирования": st.column_config.SelectboxColumn("Режим планирования", options=list(PLANNING_MODES)),
+                "Дата запуска": st.column_config.DateColumn("Дата запуска", format="DD.MM.YYYY"),
+                "Группа": st.column_config.TextColumn("Группа", disabled=True),
+                "Связанная группа": st.column_config.CheckboxColumn("Связанная группа", disabled=True),
                 "Конфликт": st.column_config.CheckboxColumn("Конфликт", disabled=True),
             },
         )
@@ -180,6 +190,95 @@ def render_orders_page() -> None:
             route_by_name,
             save_requested=save_requested,
         )
+
+
+NEW_ORDER_DEFAULTS = {
+    "order_number": "",
+    "client_name": "",
+    "product_name": "",
+    "quantity": 0.0,
+    "route_name": None,
+    "planning_mode": PLANNING_MODE_SHIPMENT,
+    "shipment_date": None,
+    "fixed_start_date": None,
+    "split": False,
+    "child_size": 0.0,
+    "linked": False,
+}
+
+
+def _new_order_state() -> dict[str, Any]:
+    state = st.session_state.setdefault("orders_page_new_order_form", dict(NEW_ORDER_DEFAULTS))
+    for key, value in NEW_ORDER_DEFAULTS.items():
+        state.setdefault(key, value)
+    return state
+
+
+def _render_new_order_form(session, repository: OrdersRepository, routes: list[Route], route_by_name: dict[str, Route]) -> None:
+    st.subheader("Новый заказ")
+    state = _new_order_state()
+    c1, c2, c3 = st.columns(3)
+    state["order_number"] = c1.text_input("Номер", value=state["order_number"], key="new_order_number")
+    state["client_name"] = c2.text_input("Клиент", value=state["client_name"], key="new_client")
+    state["product_name"] = c3.text_input("Продукция", value=state["product_name"], key="new_product")
+    c4, c5, c6 = st.columns(3)
+    state["quantity"] = c4.number_input("Тираж", min_value=0.0, step=100.0, value=float(state["quantity"] or 0.0), key="new_quantity")
+    route_names = [route.name for route in routes]
+    route_index = route_names.index(state["route_name"]) if state["route_name"] in route_names else None
+    state["route_name"] = c5.selectbox("Маршрут", options=route_names, index=route_index, key="new_route")
+    state["planning_mode"] = c6.radio("Режим планирования", options=list(PLANNING_MODES), index=list(PLANNING_MODES).index(state["planning_mode"]), horizontal=True, key="new_mode")
+    if state["planning_mode"] == PLANNING_MODE_START:
+        state["fixed_start_date"] = st.date_input("Дата запуска", value=state["fixed_start_date"], format="DD.MM.YYYY", key="new_fixed_start")
+        state["shipment_date"] = state["fixed_start_date"]
+    else:
+        state["shipment_date"] = st.date_input("Срок отгрузки", value=state["shipment_date"], format="DD.MM.YYYY", key="new_ship_date")
+        state["fixed_start_date"] = None
+    state["split"] = st.checkbox("Разбить заказ на партии", value=bool(state["split"]), key="new_split")
+    if state["split"]:
+        s1, s2 = st.columns(2)
+        state["child_size"] = s1.number_input("Размер одного дочернего заказа", min_value=0.0, step=100.0, value=float(state["child_size"] or 0.0), key="new_child_size")
+        state["linked"] = s2.checkbox("Дочерние заказы связанные", value=bool(state["linked"]), key="new_linked")
+    save_col, clear_col = st.columns(2)
+    if save_col.button("Сохранить", use_container_width=True, key="new_save"):
+        _save_new_order_form(session, repository, state, route_by_name)
+    if clear_col.button("Очистить поле", use_container_width=True, key="new_clear"):
+        st.session_state["orders_page_new_order_form"] = dict(NEW_ORDER_DEFAULTS)
+        for key in ["new_order_number","new_client","new_product","new_quantity","new_route","new_mode","new_fixed_start","new_ship_date","new_split","new_child_size","new_linked"]:
+            st.session_state.pop(key, None)
+        st.rerun()
+
+
+def _save_new_order_form(session, repository: OrdersRepository, state: dict[str, Any], route_by_name: dict[str, Route]) -> None:
+    row = {"Номер": state["order_number"], "Клиент": state["client_name"], "Продукция": state["product_name"], "Тираж": state["quantity"], "Срок отгрузки": state["shipment_date"], "Маршрут": state["route_name"], "Статус": ORDER_STATUS_NEW}
+    errors = validate_order_editor_row(row, route_names=set(route_by_name), existing_numbers={o.order_number: o.id for o in repository.list_orders()}, current_order_id=None)
+    if state["planning_mode"] == PLANNING_MODE_START and not isinstance(state.get("fixed_start_date"), date):
+        errors.append("Дата запуска обязательна.")
+    if state.get("split"):
+        child_size = _parse_quantity(state.get("child_size")) or 0
+        if child_size <= 0:
+            errors.append("Размер дочернего заказа должен быть больше нуля.")
+        if child_size >= float(state.get("quantity") or 0):
+            errors.append("Размер дочернего заказа должен быть меньше общего количества заказа")
+    if errors:
+        for error in errors: st.error(error)
+        return
+    payload = _row_to_order_payload(row, route_by_name)
+    payload.update({"planning_mode": state["planning_mode"], "fixed_start_date": state.get("fixed_start_date")})
+    if not state.get("split"):
+        repository.create_order(**payload)
+    else:
+        total = float(state["quantity"]); size = float(state["child_size"]); base = str(state["order_number"]).strip()
+        count = int((total + size - 1) // size)
+        remaining = total
+        for seq in range(1, count + 1):
+            qty = size if remaining > size else remaining
+            remaining -= qty
+            child_payload = {**payload, "order_number": f"{base}.{seq}", "quantity": qty, "child_group_key": base, "child_sequence_number": seq, "is_child_order": True, "is_linked_child_group": bool(state.get("linked"))}
+            repository.create_order(**child_payload)
+    session.commit()
+    _clear_route_capacity_cache()
+    st.success("Заказ сохранён. Пересчёт плана не запускался.")
+    st.session_state.pop(_ORDER_EDITOR_SIGNATURE_SESSION_KEY, None)
 
 
 _ORDER_EDITOR_SIGNATURE_SESSION_KEY = "orders_page_editor_signature"
@@ -255,10 +354,13 @@ def build_order_editor_rows(
                 "Клиент": "",
                 "Продукция": "",
                 "Тираж": 0.0,
+                "Режим планирования": PLANNING_MODE_SHIPMENT,
+                "Дата запуска": None,
                 "Срок отгрузки": None,
+                "Группа": "",
+                "Связанная группа": False,
                 "Маршрут": None,
                 "Статус": ORDER_STATUS_NEW,
-                "Дата запуска": None,
                 "Конфликт": False,
             }
         )
@@ -293,7 +395,10 @@ def validate_order_editor_row(
         errors.append("Продукция обязательна.")
     if quantity is None or quantity <= 0:
         errors.append("Тираж должен быть больше 0.")
-    if not isinstance(row.get("Срок отгрузки"), date):
+    if row.get("Режим планирования") == PLANNING_MODE_START:
+        if not isinstance(row.get("Дата запуска"), date):
+            errors.append("Дата запуска обязательна.")
+    elif not isinstance(row.get("Срок отгрузки"), date):
         errors.append("Срок отгрузки обязателен.")
     if not route_name or route_name not in route_names:
         errors.append("Маршрут обязателен.")
@@ -371,12 +476,18 @@ def _process_editor_changes(
                 for error in errors:
                     st.error(error)
                 return
-            repository.update_order(
-                order.id,
-                **_row_to_order_payload(
-                    row, route_by_name, original_status=order.status
-                ),
+            payload = _row_to_order_payload(
+                row, route_by_name, original_status=order.status
             )
+            payload.update(
+                {
+                    "child_group_key": order.child_group_key,
+                    "child_sequence_number": order.child_sequence_number,
+                    "is_child_order": order.is_child_order,
+                    "is_linked_child_group": order.is_linked_child_group,
+                }
+            )
+            repository.update_order(order.id, **payload)
             saved_changes = True
 
     if saved_changes:
@@ -399,7 +510,11 @@ def _row_to_order_payload(
         "client_name": str(row["Клиент"]).strip(),
         "product_name": str(row["Продукция"]).strip(),
         "quantity": float(row["Тираж"]),
-        "shipment_date": row["Срок отгрузки"],
+        "shipment_date": row["Срок отгрузки"] or row.get("Дата запуска"),
+        "planning_mode": row.get("Режим планирования") or PLANNING_MODE_SHIPMENT,
+        "fixed_start_date": row.get("Дата запуска") if row.get("Режим планирования") == PLANNING_MODE_START else None,
+        "child_group_key": row.get("Группа") or None,
+        "is_linked_child_group": bool(row.get("Связанная группа")),
         "route_id": route_by_name[str(row["Маршрут"])].id,
         "status": status,
     }
@@ -414,6 +529,8 @@ def _row_changed(row: dict[str, Any], order: Order) -> bool:
             str(row.get("Продукция") or "").strip() != order.product_name,
             _parse_quantity(row.get("Тираж")) != float(order.quantity),
             row.get("Срок отгрузки") != order.shipment_date,
+            row.get("Дата запуска") != (order.fixed_start_date or order.calculated_start_date),
+            row.get("Режим планирования") != order.planning_mode,
             row.get("Маршрут") != route_name,
             row.get("Статус") != order.status,
         ]
