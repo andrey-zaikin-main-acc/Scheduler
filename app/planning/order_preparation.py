@@ -42,16 +42,14 @@ def prepare_order(
 def sort_prepared_orders(
     prepared_orders: list[PreparedOrder] | tuple[PreparedOrder, ...],
 ) -> tuple[PreparedOrder, ...]:
-    """Sort protected planned orders first, then by deadline and ID.
-
-    Previously planned orders are placed first so lower-priority new or
-    previously conflicted orders can use remaining free windows without
-    displacing protected orders.
-    """
+    """Sort orders exclusively by user priority (ID only breaks corrupt ties)."""
     return tuple(
         sorted(
             prepared_orders,
             key=lambda prepared_order: (
+                prepared_order.order.priority,
+                # Compatibility fallback for programmatically constructed
+                # legacy orders which have not passed through DB migration.
                 0 if prepared_order.order.status == ORDER_STATUS_PLANNED else 1,
                 prepared_order.order.shipment_date,
                 prepared_order.order.id,

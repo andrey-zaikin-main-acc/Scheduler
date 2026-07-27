@@ -18,12 +18,14 @@ def order_rows(orders: list[Order]) -> list[dict[str, object]]:
     return [
         {
             "ID": order.id,
+            "Приоритет": order.priority,
             "Номер": order.order_number,
             "Клиент": order.client_name,
             "Продукция": order.product_name,
             "Тираж": order.quantity,
             "Режим планирования": order.planning_mode or "От даты отгрузки",
-            "Дата запуска": order.fixed_start_date or order.calculated_start_date,
+            # Never put a calculated value into the editable fixed-start field.
+            "Дата запуска": order.fixed_start_date,
             "Срок отгрузки": order.shipment_date,
             "Группа": order.child_group_key or "",
             "Связанная группа": bool(order.is_linked_child_group),

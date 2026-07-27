@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from datetime import date
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.constants import (
@@ -29,9 +29,9 @@ class OrdersRepository:
         self.session = session
 
     def list_orders(self) -> Sequence[Order]:
-        """Return orders ordered by shipment date and ID."""
+        """Return orders in their user-defined planning order."""
         return self.session.scalars(
-            select(Order).order_by(Order.shipment_date, Order.id)
+            select(Order).order_by(Order.priority, Order.id)
         ).all()
 
     def get_order(self, order_id: int) -> Order | None:
@@ -60,11 +60,15 @@ class OrdersRepository:
         child_sequence_number: int | None = None,
         is_child_order: bool = False,
         is_linked_child_group: bool = False,
+        priority: int | None = None,
     ) -> Order:
         """Create and persist an order."""
         if status != ORDER_STATUS_NEW:
             raise ValueError("New orders can only be created with status 'Новый'.")
+        if priority is None:
+            priority = int(self.session.scalar(select(func.max(Order.priority))) or 0) + 1
         order = Order(
+            priority=priority,
             order_number=order_number,
             client_name=client_name,
             product_name=product_name,
@@ -115,6 +119,7 @@ class OrdersRepository:
         child_sequence_number: int | None = None,
         is_child_order: bool = False,
         is_linked_child_group: bool = False,
+        priority: int | None = None,
     ) -> Order | None:
         """Update all editable order fields."""
         order = self.get_order(order_id)
@@ -143,6 +148,8 @@ class OrdersRepository:
         order.child_sequence_number = child_sequence_number
         order.is_child_order = is_child_order
         order.is_linked_child_group = is_linked_child_group
+        if priority is not None and priority != order.priority:
+            self.move_order(order.id, priority)
         if planning_inputs_changed:
             order.calculated_start_date = None
         if status == ORDER_STATUS_CANCELLED:
@@ -190,4 +197,49 @@ class OrdersRepository:
         )
         self.session.delete(order)
         self.session.flush()
+        self.normalize_priorities()
         return True
+
+    def move_order(self, order_id: int, new_priority: int) -> None:
+        """Move one order or its linked child block and close all priority gaps."""
+        orders = list(self.list_orders())
+        moving = self.get_order(order_id)
+        if moving is None or not orders:
+            return
+        if moving.is_linked_child_group and moving.child_group_key:
+            block = [
+                order for order in orders
+                if order.is_linked_child_group
+                and order.child_group_key == moving.child_group_key
+            ]
+            block.sort(key=lambda order: (order.child_sequence_number or 0, order.id))
+        else:
+            block = [moving]
+        remaining = [order for order in orders if order not in block]
+        insertion = max(0, min(int(new_priority) - 1, len(remaining)))
+        ordered = remaining[:insertion] + block + remaining[insertion:]
+        for priority, order in enumerate(ordered, start=1):
+            order.priority = priority
+        self.session.flush()
+
+    def normalize_priorities(self) -> None:
+        """Persist one unique continuous sequence while preserving linked blocks."""
+        orders = list(self.list_orders())
+        emitted_groups: set[str] = set()
+        normalized: list[Order] = []
+        for order in orders:
+            if order.is_linked_child_group and order.child_group_key:
+                if order.child_group_key in emitted_groups:
+                    continue
+                emitted_groups.add(order.child_group_key)
+                children = [
+                    child for child in orders
+                    if child.is_linked_child_group
+                    and child.child_group_key == order.child_group_key
+                ]
+                normalized.extend(sorted(children, key=lambda child: (child.child_sequence_number or 0, child.id)))
+            else:
+                normalized.append(order)
+        for priority, order in enumerate(normalized, start=1):
+            order.priority = priority
+        self.session.flush()

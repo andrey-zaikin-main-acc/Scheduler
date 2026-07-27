@@ -24,7 +24,8 @@ def test_order_rows_include_text_client_and_product() -> None:
 
     assert order_rows([order]) == [
         {
-            "ID": 10,
+                "ID": 10,
+                "Приоритет": None,
             "Номер": "O-10",
             "Клиент": "Клиент",
             "Продукция": "Продукт",

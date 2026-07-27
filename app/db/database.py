@@ -33,6 +33,7 @@ def create_all() -> None:
     _ensure_route_prevent_order_interruption_column()
     _ensure_planned_operation_day_intraday_columns()
     _ensure_order_planning_columns()
+    _ensure_order_priority_column()
     _migrate_legacy_conflict_order_status()
 
 
@@ -187,6 +188,37 @@ def _ensure_order_planning_columns() -> None:
                 """),
             {"mode": PLANNING_MODE_SHIPMENT},
         )
+
+
+def _ensure_order_priority_column() -> None:
+    """Add and initialize the global, continuous order priority safely."""
+    inspector = inspect(engine)
+    if "orders" not in inspector.get_table_names():
+        return
+    existing_columns = {column["name"] for column in inspector.get_columns("orders")}
+    with engine.begin() as connection:
+        added = "priority" not in existing_columns
+        if added:
+            # SQLite cannot add a non-null column without a default.  Zero is
+            # only a migration sentinel and is replaced in the same transaction.
+            connection.execute(
+                text("ALTER TABLE orders ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
+            )
+        rows = connection.execute(
+            text("SELECT id, priority FROM orders ORDER BY priority, id")
+        ).all()
+        priorities = [row.priority for row in rows]
+        if not added and priorities == list(range(1, len(rows) + 1)):
+            return
+        # A legacy DB is initialized by ID; an interrupted/corrupt migration is
+        # repaired deterministically using its available ordering.
+        if added:
+            rows = sorted(rows, key=lambda row: row.id)
+        for priority, row in enumerate(rows, start=1):
+            connection.execute(
+                text("UPDATE orders SET priority = :priority WHERE id = :id"),
+                {"priority": priority, "id": row.id},
+            )
 
 def _migrate_legacy_conflict_order_status() -> None:
     """Convert legacy conflict status rows to new status plus conflict record."""

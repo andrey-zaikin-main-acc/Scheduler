@@ -155,7 +155,7 @@ class RecalculationService:
         orders = self.session.scalars(
             select(Order)
             .where(Order.status.in_(PLANNABLE_ORDER_STATUSES))
-            .order_by(Order.shipment_date, Order.id)
+            .order_by(Order.priority, Order.id)
         ).all()
         orders_by_id.update((order.id, order) for order in orders)
         route_ids = {order.route_id for order in orders}
