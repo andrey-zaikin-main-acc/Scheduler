@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -19,6 +19,7 @@ from app.ui.pages.orders_page import (
     build_order_editor_rows,
     order_status_options_for_row,
     READ_ONLY_EDITOR_COLUMNS,
+    normalize_editor_date,
     validate_order_editor_row,
 )
 
@@ -40,9 +41,9 @@ def test_shipment_planning_row_displays_calculated_start_date() -> None:
     order.planning_mode = PLANNING_MODE_SHIPMENT
     order.calculated_start_date = date(2026, 7, 5)
 
-    row = build_order_editor_rows(
-        [order], selected_order_id=None, include_draft=False
-    )[0]
+    row = build_order_editor_rows([order], selected_order_id=None, include_draft=False)[
+        0
+    ]
 
     assert row["Фиксированная дата запуска"] is None
     assert row["Расчётная дата запуска"] == date(2026, 7, 5)
@@ -54,9 +55,9 @@ def test_start_planning_row_displays_fixed_and_calculated_start_dates() -> None:
     order.fixed_start_date = date(2026, 7, 5)
     order.calculated_start_date = date(2026, 7, 5)
 
-    row = build_order_editor_rows(
-        [order], selected_order_id=None, include_draft=False
-    )[0]
+    row = build_order_editor_rows([order], selected_order_id=None, include_draft=False)[
+        0
+    ]
 
     assert row["Фиксированная дата запуска"] == date(2026, 7, 5)
     assert row["Расчётная дата запуска"] == date(2026, 7, 5)
@@ -644,9 +645,147 @@ def test_zero_quantity_stops_before_slot_service(monkeypatch) -> None:
 
 def test_save_button_is_renamed_and_not_primary() -> None:
     source = __import__("pathlib").Path("app/ui/pages/orders_page.py").read_text()
-    save_call = source.split("save_requested = st.button(", 1)[1].split(")", 1)[0]
+    save_call = source.split("save_requested = st.form_submit_button(", 1)[1].split(
+        ")", 1
+    )[0]
     assert '"Сохранить изменения и пересчитать план"' in save_call
     assert 'type="primary"' not in save_call
+    assert 'with st.form("orders_page_editor_form")' in source
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (date(2026, 8, 1), date(2026, 8, 1)),
+        (datetime(2026, 8, 2, 14, 30), date(2026, 8, 2)),
+        ("2026-08-03", date(2026, 8, 3)),
+        (None, None),
+        ("not-a-date", None),
+    ],
+)
+def test_normalize_editor_date(value, expected) -> None:
+    assert normalize_editor_date(value) == expected
+
+
+def test_normalize_editor_date_accepts_pandas_timestamp() -> None:
+    pandas = pytest.importorskip("pandas")
+    assert normalize_editor_date(pandas.Timestamp("2026-08-04 11:00")) == date(
+        2026, 8, 4
+    )
+
+
+def test_mode_fixed_date_and_priority_are_saved_together(monkeypatch) -> None:
+    import app.ui.pages.orders_page as orders_page
+
+    fake_st = _FakeStreamlit()
+    repository = _FakeOrdersRepository()
+    repository.moves = []
+    repository.move_order = lambda order_id, priority: repository.moves.append(
+        (order_id, priority)
+    )
+    repository.normalize_priorities = lambda: None
+    session = _FakeSession()
+    recalculations = []
+    order = _order()
+    row = {
+        **_order_row(order),
+        "Режим планирования": PLANNING_MODE_START,
+        "Фиксированная дата запуска": datetime(2026, 8, 5, 9),
+        "Приоритет": 3,
+    }
+    monkeypatch.setattr(orders_page, "st", fake_st)
+    monkeypatch.setattr(
+        orders_page,
+        "recalculate_after_save",
+        lambda value: recalculations.append(value),
+    )
+
+    with pytest.raises(_RerunRequested):
+        orders_page._process_editor_changes(
+            session,
+            repository,
+            [order],
+            [row],
+            {order.route.name: order.route},
+            save_requested=True,
+        )
+
+    payload = repository.updated[0][1]
+    assert payload["planning_mode"] == PLANNING_MODE_START
+    assert payload["fixed_start_date"] == date(2026, 8, 5)
+    assert repository.moves == [(order.id, 3)]
+    assert session.commits == 1
+    assert recalculations == [session]
+
+
+def test_validation_error_identifies_order_and_is_atomic(monkeypatch) -> None:
+    import app.ui.pages.orders_page as orders_page
+
+    fake_st = _FakeStreamlit()
+    repository = _FakeOrdersRepository()
+    session = _FakeSession()
+    session.rollbacks = 0
+    session.rollback = lambda: setattr(session, "rollbacks", session.rollbacks + 1)
+    order = _order()
+    row = {
+        **_order_row(order),
+        "Режим планирования": PLANNING_MODE_START,
+        "Фиксированная дата запуска": None,
+        "Приоритет": 3,
+    }
+    monkeypatch.setattr(orders_page, "st", fake_st)
+
+    orders_page._process_editor_changes(
+        session,
+        repository,
+        [order],
+        [row],
+        {order.route.name: order.route},
+        save_requested=True,
+    )
+
+    assert fake_st.error_messages == [
+        "Заказ ID 10 / № O-10: фиксированная дата запуска обязательна."
+    ]
+    assert repository.updated == []
+    assert session.commits == 0
+    assert session.rollbacks == 1
+
+
+def test_unchanged_invalid_row_does_not_block_other_priority(monkeypatch) -> None:
+    import app.ui.pages.orders_page as orders_page
+
+    route = Route(id=1, name="наша сборка")
+    invalid = _order(route)
+    invalid.id = 10
+    invalid.priority = 1
+    invalid.shipment_date = None
+    moved = _order(route)
+    moved.id = 11
+    moved.order_number = "O-11"
+    moved.priority = 2
+    repository = _FakeOrdersRepository()
+    repository.moves = []
+    repository.move_order = lambda order_id, priority: repository.moves.append(
+        (order_id, priority)
+    )
+    repository.normalize_priorities = lambda: None
+    fake_st = _FakeStreamlit()
+    monkeypatch.setattr(orders_page, "st", fake_st)
+    monkeypatch.setattr(orders_page, "recalculate_after_save", lambda session: None)
+
+    with pytest.raises(_RerunRequested):
+        orders_page._process_editor_changes(
+            _FakeSession(),
+            repository,
+            [invalid, moved],
+            [_order_row(invalid), {**_order_row(moved), "Приоритет": 3}],
+            {route.name: route},
+            save_requested=True,
+        )
+
+    assert fake_st.error_messages == []
+    assert repository.moves == [(moved.id, 3)]
 
 
 def test_manual_status_options_only_include_new_and_cancelled() -> None:
