@@ -37,6 +37,30 @@ def test_seed_demo_data_is_idempotent() -> None:
         assert session.query(Setting).count() == 2
 
 
+def test_seed_orders_receive_continuous_priorities_and_keep_manual_order() -> None:
+    with make_session() as session:
+        seed_demo_data(session)
+        orders = session.scalars(select(Order).order_by(Order.priority)).all()
+        assert [order.priority for order in orders] == list(range(1, len(orders) + 1))
+
+        orders[0].priority, orders[-1].priority = (
+            orders[-1].priority,
+            orders[0].priority,
+        )
+        expected_numbers = [
+            order.order_number
+            for order in sorted(orders, key=lambda item: (item.priority, item.id))
+        ]
+        session.commit()
+
+        seed_demo_data(session)
+        reloaded = session.scalars(select(Order).order_by(Order.priority)).all()
+        assert [order.order_number for order in reloaded] == expected_numbers
+        assert [order.priority for order in reloaded] == list(
+            range(1, len(reloaded) + 1)
+        )
+
+
 def test_seed_work_centers_match_excel_source() -> None:
     with make_session() as session:
         seed_demo_data(session)

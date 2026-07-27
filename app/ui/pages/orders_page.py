@@ -1,6 +1,7 @@
 """Orders registry page."""
 
 from datetime import date, timedelta
+import math
 from typing import Any
 
 import streamlit as st
@@ -43,6 +44,7 @@ EDITOR_COLUMNS = [
 DRAFT_ORDER_SESSION_KEY = "orders_page_show_new_order_form"
 SELECTED_ORDER_SESSION_KEY = "orders_page_selected_order_id"
 ORDER_EDITOR_KEY = "orders_page_editor"
+
 
 def render_orders_page() -> None:
     """Render the orders registry with inline editing controls."""
@@ -138,15 +140,20 @@ def render_orders_page() -> None:
 
         add_col, delete_col = st.columns(2)
         with add_col:
-            if st.button("Добавить заказ", use_container_width=True, disabled=not routes):
+            if st.button(
+                "Добавить заказ", use_container_width=True, disabled=not routes
+            ):
                 st.session_state[DRAFT_ORDER_SESSION_KEY] = True
                 st.rerun()
         with delete_col:
             if st.button(
-                "Удалить заказ", use_container_width=True,
+                "Удалить заказ",
+                use_container_width=True,
                 disabled=selected_order_id is None,
             ):
-                if selected_order_id is not None and repository.delete_order(int(selected_order_id)):
+                if selected_order_id is not None and repository.delete_order(
+                    int(selected_order_id)
+                ):
                     session.commit()
                     _clear_orders_page_state()
                     recalculate_after_save(session)
@@ -185,78 +192,212 @@ NEW_ORDER_DEFAULTS = {
 
 
 def _new_order_state() -> dict[str, Any]:
-    state = st.session_state.setdefault("orders_page_new_order_form", dict(NEW_ORDER_DEFAULTS))
+    state = st.session_state.setdefault(
+        "orders_page_new_order_form", dict(NEW_ORDER_DEFAULTS)
+    )
     for key, value in NEW_ORDER_DEFAULTS.items():
         state.setdefault(key, value)
     return state
 
 
-def _render_new_order_form(session, repository: OrdersRepository, routes: list[Route], route_by_name: dict[str, Route]) -> None:
+def _render_new_order_form(
+    session,
+    repository: OrdersRepository,
+    routes: list[Route],
+    route_by_name: dict[str, Route],
+) -> None:
     st.subheader("Новый заказ")
     state = _new_order_state()
     c1, c2, c3 = st.columns(3)
-    state["order_number"] = c1.text_input("Номер", value=state["order_number"], key="new_order_number")
-    state["client_name"] = c2.text_input("Клиент", value=state["client_name"], key="new_client")
-    state["product_name"] = c3.text_input("Продукция", value=state["product_name"], key="new_product")
+    state["order_number"] = c1.text_input(
+        "Номер", value=state["order_number"], key="new_order_number"
+    )
+    state["client_name"] = c2.text_input(
+        "Клиент", value=state["client_name"], key="new_client"
+    )
+    state["product_name"] = c3.text_input(
+        "Продукция", value=state["product_name"], key="new_product"
+    )
     c4, c5, c6 = st.columns(3)
-    state["quantity"] = c4.number_input("Тираж", min_value=0.0, step=100.0, value=float(state["quantity"] or 0.0), key="new_quantity")
+    state["quantity"] = c4.number_input(
+        "Тираж",
+        min_value=0.0,
+        step=100.0,
+        value=float(state["quantity"] or 0.0),
+        key="new_quantity",
+    )
     route_names = [route.name for route in routes]
-    route_index = route_names.index(state["route_name"]) if state["route_name"] in route_names else None
-    state["route_name"] = c5.selectbox("Маршрут", options=route_names, index=route_index, key="new_route")
-    state["planning_mode"] = c6.radio("Режим планирования", options=list(PLANNING_MODES), index=list(PLANNING_MODES).index(state["planning_mode"]), horizontal=True, key="new_mode")
+    route_index = (
+        route_names.index(state["route_name"])
+        if state["route_name"] in route_names
+        else None
+    )
+    state["route_name"] = c5.selectbox(
+        "Маршрут", options=route_names, index=route_index, key="new_route"
+    )
+    state["planning_mode"] = c6.radio(
+        "Режим планирования",
+        options=list(PLANNING_MODES),
+        index=list(PLANNING_MODES).index(state["planning_mode"]),
+        horizontal=True,
+        key="new_mode",
+    )
     if state["planning_mode"] == PLANNING_MODE_START:
-        state["fixed_start_date"] = st.date_input("Дата запуска", value=state["fixed_start_date"], format="DD.MM.YYYY", key="new_fixed_start")
+        state["fixed_start_date"] = st.date_input(
+            "Дата запуска",
+            value=state["fixed_start_date"],
+            format="DD.MM.YYYY",
+            key="new_fixed_start",
+        )
         state["shipment_date"] = state["fixed_start_date"]
     else:
-        state["shipment_date"] = st.date_input("Срок отгрузки", value=state["shipment_date"], format="DD.MM.YYYY", key="new_ship_date")
+        state["shipment_date"] = st.date_input(
+            "Срок отгрузки",
+            value=state["shipment_date"],
+            format="DD.MM.YYYY",
+            key="new_ship_date",
+        )
         state["fixed_start_date"] = None
-    state["split"] = st.checkbox("Разбить заказ на партии", value=bool(state["split"]), key="new_split")
+    state["split"] = st.checkbox(
+        "Разбить заказ на партии", value=bool(state["split"]), key="new_split"
+    )
     if state["split"]:
         s1, s2 = st.columns(2)
-        state["child_size"] = s1.number_input("Размер одного дочернего заказа", min_value=0.0, step=100.0, value=float(state["child_size"] or 0.0), key="new_child_size")
-        state["linked"] = s2.checkbox("Дочерние заказы связанные", value=bool(state["linked"]), key="new_linked")
+        state["child_size"] = s1.number_input(
+            "Размер одного дочернего заказа",
+            min_value=0.0,
+            step=100.0,
+            value=float(state["child_size"] or 0.0),
+            key="new_child_size",
+        )
+        state["linked"] = s2.checkbox(
+            "Дочерние заказы связанные", value=bool(state["linked"]), key="new_linked"
+        )
     save_col, clear_col = st.columns(2)
     if save_col.button("Сохранить", use_container_width=True, key="new_save"):
         _save_new_order_form(session, repository, state, route_by_name)
     if clear_col.button("Очистить поле", use_container_width=True, key="new_clear"):
         st.session_state["orders_page_new_order_form"] = dict(NEW_ORDER_DEFAULTS)
-        for key in ["new_order_number","new_client","new_product","new_quantity","new_route","new_mode","new_fixed_start","new_ship_date","new_split","new_child_size","new_linked"]:
+        for key in [
+            "new_order_number",
+            "new_client",
+            "new_product",
+            "new_quantity",
+            "new_route",
+            "new_mode",
+            "new_fixed_start",
+            "new_ship_date",
+            "new_split",
+            "new_child_size",
+            "new_linked",
+        ]:
             st.session_state.pop(key, None)
         st.rerun()
 
 
-def _save_new_order_form(session, repository: OrdersRepository, state: dict[str, Any], route_by_name: dict[str, Route]) -> None:
-    row = {"Номер": state["order_number"], "Клиент": state["client_name"], "Продукция": state["product_name"], "Тираж": state["quantity"], "Срок отгрузки": state["shipment_date"], "Маршрут": state["route_name"], "Статус": ORDER_STATUS_NEW}
-    errors = validate_order_editor_row(row, route_names=set(route_by_name), existing_numbers={o.order_number: o.id for o in repository.list_orders()}, current_order_id=None)
-    if state["planning_mode"] == PLANNING_MODE_START and not isinstance(state.get("fixed_start_date"), date):
+def _save_new_order_form(
+    session,
+    repository: OrdersRepository,
+    state: dict[str, Any],
+    route_by_name: dict[str, Route],
+) -> None:
+    row = {
+        "Номер": state["order_number"],
+        "Клиент": state["client_name"],
+        "Продукция": state["product_name"],
+        "Тираж": state["quantity"],
+        "Срок отгрузки": state["shipment_date"],
+        "Маршрут": state["route_name"],
+        "Статус": ORDER_STATUS_NEW,
+    }
+    errors = validate_order_editor_row(
+        row,
+        route_names=set(route_by_name),
+        existing_numbers={o.order_number: o.id for o in repository.list_orders()},
+        current_order_id=None,
+    )
+    if state["planning_mode"] == PLANNING_MODE_START and not isinstance(
+        state.get("fixed_start_date"), date
+    ):
         errors.append("Дата запуска обязательна.")
     if state.get("split"):
         child_size = _parse_quantity(state.get("child_size")) or 0
         if child_size <= 0:
             errors.append("Размер дочернего заказа должен быть больше нуля.")
         if child_size >= float(state.get("quantity") or 0):
-            errors.append("Размер дочернего заказа должен быть меньше общего количества заказа")
+            errors.append(
+                "Размер дочернего заказа должен быть меньше общего количества заказа"
+            )
     if errors:
-        for error in errors: st.error(error)
+        for error in errors:
+            st.error(error)
         return
     payload = _row_to_order_payload(row, route_by_name)
-    payload.update({"planning_mode": state["planning_mode"], "fixed_start_date": state.get("fixed_start_date")})
+    payload.update(
+        {
+            "planning_mode": state["planning_mode"],
+            "fixed_start_date": state.get("fixed_start_date"),
+        }
+    )
     if not state.get("split"):
         repository.create_order(**payload)
     else:
-        total = float(state["quantity"]); size = float(state["child_size"]); base = str(state["order_number"]).strip()
-        count = int((total + size - 1) // size)
-        remaining = total
-        for seq in range(1, count + 1):
-            qty = size if remaining > size else remaining
-            remaining -= qty
-            child_payload = {**payload, "order_number": f"{base}.{seq}", "quantity": qty, "child_group_key": base, "child_sequence_number": seq, "is_child_order": True, "is_linked_child_group": bool(state.get("linked"))}
-            repository.create_order(**child_payload)
+        total = float(state["quantity"])
+        size = float(state["child_size"])
+        base = str(state["order_number"]).strip()
+        quantities = _split_child_quantities(total, size)
+        child_numbers = [f"{base}.{seq}" for seq in range(1, len(quantities) + 1)]
+        conflicts = [
+            number
+            for number in child_numbers
+            if repository.get_by_number(number) is not None
+        ]
+        if conflicts:
+            st.error(
+                "Невозможно создать группу: уже существуют заказы с номерами: "
+                + ", ".join(conflicts)
+            )
+            return
+        try:
+            # A savepoint makes the group all-or-nothing even if a later flush
+            # fails (for example because another writer inserted a number).
+            with session.begin_nested():
+                for seq, (number, qty) in enumerate(
+                    zip(child_numbers, quantities, strict=True), start=1
+                ):
+                    child_payload = {
+                        **payload,
+                        "order_number": number,
+                        "quantity": qty,
+                        "child_group_key": base,
+                        "child_sequence_number": seq,
+                        "is_child_order": True,
+                        "is_linked_child_group": bool(state.get("linked")),
+                    }
+                    repository.create_order(**child_payload)
+        except Exception as exc:
+            session.rollback()
+            st.error(f"Не удалось создать группу дочерних заказов: {exc}")
+            return
     session.commit()
     _clear_route_capacity_cache()
     st.success("Заказ сохранён. Пересчёт плана не запускался.")
     _clear_orders_page_state(close_form=True)
     st.rerun()
+
+
+def _split_child_quantities(total: float, size: float) -> list[float]:
+    """Split a float quantity without losing or inventing a final remainder."""
+    quotient = total / size
+    nearest = round(quotient)
+    count = (
+        nearest
+        if math.isclose(quotient, nearest, rel_tol=1e-12, abs_tol=1e-12)
+        else math.ceil(quotient)
+    )
+    quantities = [size] * max(0, count - 1)
+    quantities.append(total - math.fsum(quantities))
+    return quantities
 
 
 _ORDER_EDITOR_SIGNATURE_SESSION_KEY = "orders_page_editor_signature"
@@ -520,7 +661,11 @@ def _row_to_order_payload(
         "quantity": float(row["Тираж"]),
         "shipment_date": row["Срок отгрузки"] or row.get("Дата запуска"),
         "planning_mode": row.get("Режим планирования") or PLANNING_MODE_SHIPMENT,
-        "fixed_start_date": row.get("Дата запуска") if row.get("Режим планирования") == PLANNING_MODE_START else None,
+        "fixed_start_date": (
+            row.get("Дата запуска")
+            if row.get("Режим планирования") == PLANNING_MODE_START
+            else None
+        ),
         "child_group_key": row.get("Группа") or None,
         "is_linked_child_group": bool(row.get("Связанная группа")),
         "route_id": route_by_name[str(row["Маршрут"])].id,
@@ -537,7 +682,7 @@ def _row_changed(row: dict[str, Any], order: Order) -> bool:
             str(row.get("Продукция") or "").strip() != order.product_name,
             _parse_quantity(row.get("Тираж")) != float(order.quantity),
             row.get("Срок отгрузки") != order.shipment_date,
-            row.get("Дата запуска") != (order.fixed_start_date or order.calculated_start_date),
+            row.get("Дата запуска") != order.fixed_start_date,
             row.get("Режим планирования") != order.planning_mode,
             row.get("Маршрут") != route_name,
             row.get("Статус") != order.status,

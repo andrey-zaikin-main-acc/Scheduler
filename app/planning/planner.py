@@ -139,17 +139,25 @@ class PlanningEngine:
             ),
         )
 
-
-    def plan_prepared_order_from_fixed_start(self, prepared_order: PreparedOrder) -> PlannedOrderResult:
+    def plan_prepared_order_from_fixed_start(
+        self, prepared_order: PreparedOrder
+    ) -> PlannedOrderResult:
         """Plan a prepared order forward from its immutable fixed start date."""
         order = prepared_order.order
         if order.fixed_start_date is None:
-            return self._invalid_order_result(order, "Дата запуска обязательна для режима планирования от даты запуска.")
+            return self._invalid_order_result(
+                order,
+                "Дата запуска обязательна для режима планирования от даты запуска.",
+            )
         first_requirement = prepared_order.requirements[0]
         fixed_start = self.capacity_calendar.workday_bounds(
             first_requirement.route_operation.work_center_id, order.fixed_start_date
         )[0]
-        batch_hours = order.quantity * first_requirement.route_operation.labor_hours_per_1000 / 1000
+        batch_hours = (
+            order.quantity
+            * first_requirement.route_operation.labor_hours_per_1000
+            / 1000
+        )
         if not self.capacity_calendar._can_reserve_contiguous(
             first_requirement.route_operation.work_center_id, fixed_start, batch_hours
         ):
@@ -162,11 +170,17 @@ class PlanningEngine:
                     work_center_id=first_requirement.route_operation.work_center_id,
                     required_hours=batch_hours,
                     available_hours=self.capacity_calendar.free_hours(
-                        first_requirement.route_operation.work_center_id, order.fixed_start_date
+                        first_requirement.route_operation.work_center_id,
+                        order.fixed_start_date,
                     ),
-                    deficit_hours=max(0.0, batch_hours - self.capacity_calendar.free_hours(
-                        first_requirement.route_operation.work_center_id, order.fixed_start_date
-                    )),
+                    deficit_hours=max(
+                        0.0,
+                        batch_hours
+                        - self.capacity_calendar.free_hours(
+                            first_requirement.route_operation.work_center_id,
+                            order.fixed_start_date,
+                        ),
+                    ),
                     blocking_order_ids=self.capacity_calendar.blocking_order_ids(
                         work_center_id=first_requirement.route_operation.work_center_id,
                         start_date=order.fixed_start_date,
@@ -175,10 +189,29 @@ class PlanningEngine:
                     reason="Первая операция не может начаться в фиксированную дату запуска из-за занятой мощности.",
                 ),
             )
-        return self._try_place_forward_flow(prepared_order, fixed_start)
+        snapshot = self.capacity_calendar.snapshot()
+        try:
+            planned_or_conflict = self._try_place_forward_flow(
+                prepared_order, fixed_start, enforce_shipment_deadline=False
+            )
+        except Exception as exc:
+            self.capacity_calendar.restore(snapshot)
+            return self._invalid_order_result(order, str(exc))
+        if isinstance(planned_or_conflict, PlanningConflict):
+            self.capacity_calendar.restore(snapshot)
+            return PlannedOrderResult(
+                order_id=order.id,
+                calculated_start_date=None,
+                conflict=planned_or_conflict,
+            )
+        return planned_or_conflict
 
     def _try_place_forward_flow(
-        self, prepared_order: PreparedOrder, first_operation_not_before: datetime
+        self,
+        prepared_order: PreparedOrder,
+        first_operation_not_before: datetime,
+        *,
+        enforce_shipment_deadline: bool = True,
     ) -> PlannedOrderResult | PlanningConflict:
         order = prepared_order.order
         placed_operations: list[ScheduledOperation] = []
@@ -204,6 +237,7 @@ class PlanningEngine:
                 block_result = self._place_uninterrupted_operation_batches(
                     order_id=order.id,
                     shipment_date=order.shipment_date,
+                    enforce_shipment_deadline=enforce_shipment_deadline,
                     route_operation=route_operation,
                     operation_batches=operation_batches,
                 )
@@ -281,6 +315,7 @@ class PlanningEngine:
         shipment_date: date,
         route_operation: PlanningRouteOperation,
         operation_batches: list[tuple[float, datetime, bool]],
+        enforce_shipment_deadline: bool = True,
     ) -> list[ScheduledOperation] | PlanningConflict:
         """Place all batches of one protected route operation as one uninterrupted block."""
         batch_specs = [
@@ -289,13 +324,17 @@ class PlanningEngine:
         ]
         total_hours = sum(hours for _, _, hours in batch_specs)
         candidate = max(ready for _, ready, _ in batch_specs[:1])
-        deadline = self._shipment_deadline(route_operation, shipment_date)
+        deadline = (
+            self._shipment_deadline(route_operation, shipment_date)
+            if enforce_shipment_deadline
+            else None
+        )
 
-        while candidate <= deadline:
+        while deadline is None or candidate <= deadline:
             start = self.capacity_calendar.find_earliest_contiguous_start(
                 route_operation.work_center_id, candidate, total_hours
             )
-            if start > deadline:
+            if deadline is not None and start > deadline:
                 break
             snapshot = self.capacity_calendar.snapshot()
             cursor = start
@@ -336,7 +375,7 @@ class PlanningEngine:
                 self.capacity_calendar.restore(snapshot)
                 candidate = max(readiness_violation, start + timedelta(minutes=1))
                 continue
-            if cursor <= deadline:
+            if deadline is None or cursor <= deadline:
                 return scheduled_operations
             self.capacity_calendar.restore(snapshot)
             break

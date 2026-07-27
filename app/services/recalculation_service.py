@@ -90,6 +90,9 @@ class RecalculationService:
         )
 
         orders_by_id: dict[int, Order] = {}
+        # Repair priorities imported from legacy/corrupt databases before they
+        # become the planner's sole queue criterion.
+        self.orders_repository.normalize_priorities()
         prepared_orders, invalid_results = self._prepare_orders(orders_by_id)
         sorted_orders = sort_prepared_orders(prepared_orders)
 
@@ -215,10 +218,16 @@ class RecalculationService:
                 for operation in result.operations
                 for day in operation.days
             )
-        misses_start_deadline = (
-            result.calculated_start_date is None
-            or result.calculated_start_date > order.shipment_date
-        )
+        if order.planning_mode == PLANNING_MODE_START:
+            misses_start_deadline = (
+                result.calculated_start_date is None
+                or result.calculated_start_date != order.fixed_start_date
+            )
+        else:
+            misses_start_deadline = (
+                result.calculated_start_date is None
+                or result.calculated_start_date > order.shipment_date
+            )
         misses_finish_deadline = (
             last_finish is None or last_finish.date() > order.shipment_date
         )
@@ -254,7 +263,11 @@ class RecalculationService:
         order.status = ORDER_STATUS_PLANNED
         order.calculated_start_date = result.calculated_start_date
         if order.planning_mode == PLANNING_MODE_START and result.operations:
-            order.shipment_date = max(day.end_datetime for operation in result.operations for day in operation.days).date()
+            order.shipment_date = max(
+                day.end_datetime
+                for operation in result.operations
+                for day in operation.days
+            ).date()
         for scheduled_operation in result.operations:
             planned_operation = map_scheduled_operation_to_orm(scheduled_operation)
             self.plan_repository.add_planned_operation(planned_operation)

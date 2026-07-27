@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from app.constants import ORDER_STATUS_PLANNED, PLANNABLE_ORDER_STATUSES
+from app.constants import PLANNABLE_ORDER_STATUSES
 from app.planning.entities import (
     OperationRequirement,
     PlanningOrder,
@@ -48,10 +48,6 @@ def sort_prepared_orders(
             prepared_orders,
             key=lambda prepared_order: (
                 prepared_order.order.priority,
-                # Compatibility fallback for programmatically constructed
-                # legacy orders which have not passed through DB migration.
-                0 if prepared_order.order.status == ORDER_STATUS_PLANNED else 1,
-                prepared_order.order.shipment_date,
                 prepared_order.order.id,
             ),
         )
