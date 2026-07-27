@@ -1,6 +1,6 @@
 """Orders registry page."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import math
 from typing import Any
 
@@ -102,52 +102,61 @@ def render_orders_page() -> None:
             )
         else:
             _sync_order_editor_state(rows)
-            edited_rows = st.data_editor(
-                rows,
-                key=ORDER_EDITOR_KEY,
-                use_container_width=True,
-                hide_index=True,
-                disabled=READ_ONLY_EDITOR_COLUMNS,
-                column_order=EDITOR_COLUMNS,
-                num_rows="fixed",
-                column_config={
-                    "Выбран": st.column_config.CheckboxColumn(
-                        "Выбран", help="Отметьте один заказ для удаления."
-                    ),
-                    "ID": st.column_config.NumberColumn("ID", disabled=True),
-                    "Приоритет": st.column_config.NumberColumn(
-                        "Приоритет", min_value=1, max_value=len(rows), step=1
-                    ),
-                    "Тираж": st.column_config.NumberColumn(
-                        "Тираж", min_value=0.01, step=100.0
-                    ),
-                    "Срок отгрузки": st.column_config.DateColumn(
-                        "Срок отгрузки", format="DD.MM.YYYY"
-                    ),
-                    "Маршрут": st.column_config.SelectboxColumn(
-                        "Маршрут", options=list(route_by_name)
-                    ),
-                    "Статус": st.column_config.SelectboxColumn(
-                        "Статус", options=list(ORDER_STATUSES)
-                    ),
-                    "Режим планирования": st.column_config.SelectboxColumn(
-                        "Режим планирования", options=list(PLANNING_MODES)
-                    ),
-                    "Фиксированная дата запуска": st.column_config.DateColumn(
-                        "Фиксированная дата запуска", format="DD.MM.YYYY"
-                    ),
-                    "Расчётная дата запуска": st.column_config.DateColumn(
-                        "Расчётная дата запуска", format="DD.MM.YYYY", disabled=True
-                    ),
-                    "Группа": st.column_config.TextColumn("Группа", disabled=True),
-                    "Связанная группа": st.column_config.CheckboxColumn(
-                        "Связанная группа", disabled=True
-                    ),
-                    "Конфликт": st.column_config.CheckboxColumn(
-                        "Конфликт", disabled=True
-                    ),
-                },
-            )
+            # The submit button deliberately lives in the same form as the editor.
+            # Streamlit otherwise runs the script for the button click before the
+            # browser has necessarily sent the last edited cell.
+            with st.form("orders_page_editor_form"):
+                edited_rows = st.data_editor(
+                    rows,
+                    key=ORDER_EDITOR_KEY,
+                    use_container_width=True,
+                    hide_index=True,
+                    disabled=READ_ONLY_EDITOR_COLUMNS,
+                    column_order=EDITOR_COLUMNS,
+                    num_rows="fixed",
+                    column_config={
+                        "Выбран": st.column_config.CheckboxColumn(
+                            "Выбран", help="Отметьте один заказ для удаления."
+                        ),
+                        "ID": st.column_config.NumberColumn("ID", disabled=True),
+                        "Приоритет": st.column_config.NumberColumn(
+                            "Приоритет", min_value=1, max_value=len(rows), step=1
+                        ),
+                        "Тираж": st.column_config.NumberColumn(
+                            "Тираж", min_value=0.01, step=100.0
+                        ),
+                        "Срок отгрузки": st.column_config.DateColumn(
+                            "Срок отгрузки", format="DD.MM.YYYY"
+                        ),
+                        "Маршрут": st.column_config.SelectboxColumn(
+                            "Маршрут", options=list(route_by_name)
+                        ),
+                        "Статус": st.column_config.SelectboxColumn(
+                            "Статус", options=list(ORDER_STATUSES)
+                        ),
+                        "Режим планирования": st.column_config.SelectboxColumn(
+                            "Режим планирования", options=list(PLANNING_MODES)
+                        ),
+                        "Фиксированная дата запуска": st.column_config.DateColumn(
+                            "Фиксированная дата запуска", format="DD.MM.YYYY"
+                        ),
+                        "Расчётная дата запуска": st.column_config.DateColumn(
+                            "Расчётная дата запуска", format="DD.MM.YYYY", disabled=True
+                        ),
+                        "Группа": st.column_config.TextColumn("Группа", disabled=True),
+                        "Связанная группа": st.column_config.CheckboxColumn(
+                            "Связанная группа", disabled=True
+                        ),
+                        "Конфликт": st.column_config.CheckboxColumn(
+                            "Конфликт", disabled=True
+                        ),
+                    },
+                )
+                save_requested = st.form_submit_button(
+                    "Сохранить изменения и пересчитать план",
+                    use_container_width=True,
+                    disabled=not routes,
+                )
 
         add_col, delete_col = st.columns(2)
         with add_col:
@@ -171,11 +180,8 @@ def render_orders_page() -> None:
                     st.rerun()
                 st.error("Выбранный заказ не найден.")
 
-        save_requested = st.button(
-            "Сохранить изменения и пересчитать план",
-            use_container_width=True,
-            disabled=not routes,
-        )
+        if not rows:
+            save_requested = False
         if rows:
             _process_editor_changes(
                 session,
@@ -531,9 +537,9 @@ def validate_order_editor_row(
     if current_order_id is not None and "Приоритет" in row and priority is None:
         errors.append("Приоритет должен быть целым числом не меньше 1.")
     if row.get("Режим планирования") == PLANNING_MODE_START:
-        if not isinstance(row.get("Фиксированная дата запуска"), date):
+        if normalize_editor_date(row.get("Фиксированная дата запуска")) is None:
             errors.append("Фиксированная дата запуска обязательна.")
-    elif not isinstance(row.get("Срок отгрузки"), date):
+    elif normalize_editor_date(row.get("Срок отгрузки")) is None:
         errors.append("Срок отгрузки обязателен.")
     if not route_name or route_name not in route_names:
         errors.append("Маршрут обязателен.")
@@ -564,7 +570,6 @@ def _process_editor_changes(
         order.id: (order.priority or index)
         for index, order in enumerate(orders, start=1)
     }
-    existing_numbers = {order.order_number: order.id for order in orders}
     selected_ids = [
         int(row["ID"])
         for row in edited_rows
@@ -573,54 +578,83 @@ def _process_editor_changes(
     selected_id = selected_ids[-1] if selected_ids else None
     if selected_id != st.session_state.get(SELECTED_ORDER_SESSION_KEY):
         st.session_state[SELECTED_ORDER_SESSION_KEY] = selected_id
-        st.rerun()
+        if not save_requested:
+            st.rerun()
 
     if not save_requested:
         return
 
-    # Validate the complete editor snapshot before mutating any ORM object.
+    # Uniqueness is the only validation that intentionally considers the whole
+    # final snapshot. Duplicate priorities are move commands, not errors.
+    number_rows: dict[str, list[dict[str, Any]]] = {}
+    for row in edited_rows:
+        number = str(row.get("Номер") or "").strip()
+        if number:
+            number_rows.setdefault(number, []).append(row)
+    final_number_owners = {
+        number: rows_for_number[0].get("ID")
+        for number, rows_for_number in number_rows.items()
+        if len(rows_for_number) == 1
+    }
+
+    validation_errors: list[str] = []
+    for number, duplicate_rows in number_rows.items():
+        if len(duplicate_rows) > 1:
+            for row in duplicate_rows:
+                validation_errors.append(
+                    f"{_row_label(row)}: номер заказа {number!r} должен быть уникальным."
+                )
+
+    changed_rows: list[tuple[dict[str, Any], Order | None]] = []
     for row in edited_rows:
         order_id = row.get("ID")
         if order_id is not None and "Приоритет" not in row:
             row["Приоритет"] = original_priorities[int(order_id)]
         if order_id is None:
             if _is_blank_draft_row(row):
-                st.warning(
-                    "Новая строка ещё не заполнена: укажите обязательные поля, чтобы создать заказ."
-                )
-                return
+                continue
+            changed_rows.append((row, None))
             errors = validate_order_editor_row(
                 row,
                 route_names=set(route_by_name),
-                existing_numbers=existing_numbers,
+                existing_numbers=final_number_owners,
                 current_order_id=None,
             )
-            if errors:
-                for error in errors:
-                    st.error(error)
-                return
+            validation_errors.extend(
+                f"{_row_label(row)}: {error[0].lower() + error[1:]}" for error in errors
+            )
+            continue
         order = original_by_id.get(int(order_id)) if order_id is not None else None
-        if order is not None:
+        if order is not None and _row_changed(row, order):
+            changed_rows.append((row, order))
             errors = validate_order_editor_row(
                 row,
                 route_names=set(route_by_name),
-                existing_numbers=existing_numbers,
+                existing_numbers=final_number_owners,
                 current_order_id=order.id,
                 original_status=order.status,
             )
-            if errors:
-                for error in errors:
-                    st.error(error)
-                return
+        else:
+            errors = []
+        validation_errors.extend(
+            f"{_row_label(row)}: {error[0].lower() + error[1:]}" for error in errors
+        )
 
-    for row in edited_rows:
-        order_id = row.get("ID")
-        if order_id is None:
-            repository.create_order(**_row_to_order_payload(row, route_by_name))
-            st.session_state[DRAFT_ORDER_SESSION_KEY] = False
-            continue
-        order = original_by_id.get(int(order_id))
-        if order is not None and _row_changed(row, order):
+    if validation_errors:
+        for error in validation_errors:
+            st.error(error)
+        # Validation happened before writes; expiring protects callers that had
+        # unrelated autoflush changes from observing a partially prepared state.
+        if hasattr(session, "rollback"):
+            session.rollback()
+        return
+
+    try:
+        for row, order in changed_rows:
+            if order is None:
+                repository.create_order(**_row_to_order_payload(row, route_by_name))
+                st.session_state[DRAFT_ORDER_SESSION_KEY] = False
+                continue
             payload = _row_to_order_payload(
                 row, route_by_name, original_status=order.status
             )
@@ -634,23 +668,27 @@ def _process_editor_changes(
             )
             repository.update_order(order.id, **payload)
 
-    # Apply explicit moves against the immutable editor-opening sequence.  This
-    # prevents shifts caused by an earlier move from being mistaken for another
-    # user request while iterating through the remaining rows.
-    for row in edited_rows:
-        order_id = row.get("ID")
-        requested = _parse_priority(row.get("Приоритет"))
-        if (
-            order_id is not None
-            and requested is not None
-            and requested != original_priorities.get(int(order_id))
-        ):
-            repository.move_order(int(order_id), requested)
+        # Apply explicit moves against the immutable editor-opening sequence. This
+        # prevents shifts caused by an earlier move from being mistaken for another
+        # user request while iterating through the remaining rows.
+        for row in edited_rows:
+            order_id = row.get("ID")
+            requested = _parse_priority(row.get("Приоритет"))
+            if (
+                order_id is not None
+                and requested is not None
+                and requested != original_priorities.get(int(order_id))
+            ):
+                repository.move_order(int(order_id), requested)
 
-    if hasattr(repository, "normalize_priorities"):
-        repository.normalize_priorities()
-    # The planner must start only after all editor writes are durably committed.
-    session.commit()
+        if hasattr(repository, "normalize_priorities"):
+            repository.normalize_priorities()
+        # The planner must start only after all editor writes are durably committed.
+        session.commit()
+    except Exception:
+        if hasattr(session, "rollback"):
+            session.rollback()
+        raise
     if hasattr(session, "expire_all"):
         session.expire_all()
     _clear_route_capacity_cache()
@@ -671,11 +709,11 @@ def _row_to_order_payload(
         "client_name": str(row["Клиент"]).strip(),
         "product_name": str(row["Продукция"]).strip(),
         "quantity": float(row["Тираж"]),
-        "shipment_date": row["Срок отгрузки"]
-        or row.get("Фиксированная дата запуска"),
+        "shipment_date": normalize_editor_date(row.get("Срок отгрузки"))
+        or normalize_editor_date(row.get("Фиксированная дата запуска")),
         "planning_mode": row.get("Режим планирования") or PLANNING_MODE_SHIPMENT,
         "fixed_start_date": (
-            row.get("Фиксированная дата запуска")
+            normalize_editor_date(row.get("Фиксированная дата запуска"))
             if row.get("Режим планирования") == PLANNING_MODE_START
             else None
         ),
@@ -694,8 +732,9 @@ def _row_changed(row: dict[str, Any], order: Order) -> bool:
             str(row.get("Клиент") or "").strip() != order.client_name,
             str(row.get("Продукция") or "").strip() != order.product_name,
             _parse_quantity(row.get("Тираж")) != float(order.quantity),
-            row.get("Срок отгрузки") != order.shipment_date,
-            row.get("Фиксированная дата запуска") != order.fixed_start_date,
+            normalize_editor_date(row.get("Срок отгрузки")) != order.shipment_date,
+            normalize_editor_date(row.get("Фиксированная дата запуска"))
+            != order.fixed_start_date,
             row.get("Режим планирования") != order.planning_mode,
             row.get("Маршрут") != route_name,
             row.get("Статус") != order.status,
@@ -716,6 +755,47 @@ def _parse_quantity(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def normalize_editor_date(value: Any) -> date | None:
+    """Convert values emitted by Streamlit/pandas into a plain database date."""
+    if value is None:
+        return None
+    try:
+        if value != value:  # NaN / pandas.NaT
+            return None
+    except (TypeError, ValueError):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    # pandas.Timestamp and compatible scalar types expose this method.
+    to_python = getattr(value, "to_pydatetime", None)
+    if callable(to_python):
+        try:
+            converted = to_python()
+            if isinstance(converted, datetime):
+                return converted.date()
+            return converted if isinstance(converted, date) else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value.strip())
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _row_label(row: dict[str, Any]) -> str:
+    order_id = row.get("ID")
+    number = str(row.get("Номер") or "без номера").strip()
+    return (
+        f"Заказ ID {order_id} / № {number}"
+        if order_id is not None
+        else f"Новый заказ / № {number}"
+    )
 
 
 def _parse_priority(value: Any) -> int | None:

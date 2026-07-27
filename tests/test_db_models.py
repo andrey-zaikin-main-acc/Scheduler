@@ -125,6 +125,26 @@ def test_order_move_shifts_priorities_and_delete_closes_gap(session: Session) ->
     assert [order.priority for order in repository.list_orders()] == [1, 2]
 
 
+def test_order_move_from_second_to_third_swaps_previous_third(session: Session) -> None:
+    route = Route(name="Маршрут перестановки")
+    session.add(route)
+    session.flush()
+    repository = OrdersRepository(session)
+    created = [
+        repository.create_order(
+            order_number=f"S-{number}", client_name="К", product_name="П",
+            quantity=1000, shipment_date=date(2026, 8, number), route_id=route.id,
+        )
+        for number in range(1, 4)
+    ]
+
+    repository.move_order(created[1].id, 3)
+
+    assert [(order.id, order.priority) for order in repository.list_orders()] == [
+        (created[0].id, 1), (created[2].id, 2), (created[1].id, 3)
+    ]
+
+
 def test_linked_children_move_as_a_consecutive_block(session: Session) -> None:
     route = Route(name="Дочерний маршрут")
     session.add(route)
