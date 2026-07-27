@@ -321,7 +321,7 @@ def test_conflicted_order_participates_again_and_can_become_planned(
     assert session.query(PlannedOperation).filter_by(order_id=order.id).count() == 1
 
 
-def test_planned_orders_are_sorted_before_new_orders() -> None:
+def test_fallback_sort_ignores_status_and_shipment_date() -> None:
     from app.planning.entities import PlanningOrder
     from app.planning.order_preparation import PreparedOrder, sort_prepared_orders
 
@@ -332,4 +332,4 @@ def test_planned_orders_are_sorted_before_new_orders() -> None:
         PlanningOrder(1, 1000, date(2026, 7, 10), ORDER_STATUS_NEW), (), 0
     )
 
-    assert sort_prepared_orders([new, planned]) == (planned, new)
+    assert sort_prepared_orders([planned, new]) == (new, planned)

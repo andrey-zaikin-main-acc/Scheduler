@@ -4,7 +4,7 @@ import argparse
 from dataclasses import dataclass
 from datetime import date, time, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.constants import ORDER_STATUS_NEW
@@ -22,6 +22,7 @@ from app.db.models import (
     Setting,
     WorkCenter,
 )
+from app.repositories.orders_repository import OrdersRepository
 
 TRANSFER_BATCH_QUANTITY = 1000.0
 
@@ -154,7 +155,14 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
 
 ORDER_SPECS: tuple[tuple[str, str, str, float, int, str], ...] = (
     ("EXCEL-101", "Клиент Excel A", "Наша сборка", 10_000.0, 21, "наша сборка"),
-    ("EXCEL-102", "Клиент Excel B", "Наша сборка малая", 8_000.0, 18, "наша сборка малая"),
+    (
+        "EXCEL-102",
+        "Клиент Excel B",
+        "Наша сборка малая",
+        8_000.0,
+        18,
+        "наша сборка малая",
+    ),
     ("EXCEL-103", "Клиент Excel C", "Витрина Кола", 6_000.0, 14, "поток витрина Кола"),
     ("EXCEL-104", "Клиент Excel D", "Ленты", 20_000.0, 10, "поток ленты"),
     ("EXCEL-105", "Клиент Excel E", "Театры", 2_000.0, 7, "поток театры"),
@@ -193,7 +201,13 @@ def _remove_legacy_demo_data(session: Session) -> None:
     legacy_work_centers = ["Печать", "Упаковка"]
 
     session.execute(delete(Order).where(Order.order_number.in_(legacy_order_numbers)))
-    session.execute(delete(RouteOperation).where(RouteOperation.route_id.in_(select(Route.id).where(Route.name.in_(legacy_routes)))))
+    session.execute(
+        delete(RouteOperation).where(
+            RouteOperation.route_id.in_(
+                select(Route.id).where(Route.name.in_(legacy_routes))
+            )
+        )
+    )
     session.execute(delete(Route).where(Route.name.in_(legacy_routes)))
     session.execute(delete(WorkCenter).where(WorkCenter.name.in_(legacy_work_centers)))
     session.flush()
@@ -239,7 +253,9 @@ def _seed_work_centers(session: Session) -> dict[str, WorkCenter]:
     return result
 
 
-def _seed_routes(session: Session, work_centers: dict[str, WorkCenter]) -> dict[str, Route]:
+def _seed_routes(
+    session: Session, work_centers: dict[str, WorkCenter]
+) -> dict[str, Route]:
     routes: dict[str, Route] = {}
     for spec in ROUTE_SPECS:
         route = session.scalar(select(Route).where(Route.name == spec.name))
@@ -251,7 +267,9 @@ def _seed_routes(session: Session, work_centers: dict[str, WorkCenter]) -> dict[
         else:
             route.description = description
             route.is_active = True
-            session.execute(delete(RouteOperation).where(RouteOperation.route_id == route.id))
+            session.execute(
+                delete(RouteOperation).where(RouteOperation.route_id == route.id)
+            )
             session.flush()
 
         operations = _positive_route_operations(spec)
@@ -262,7 +280,9 @@ def _seed_routes(session: Session, work_centers: dict[str, WorkCenter]) -> dict[
                     sequence_number=index,
                     work_center_id=work_centers[work_center_name].id,
                     labor_hours_per_1000=labor_hours,
-                    min_transfer_quantity_to_next=TRANSFER_BATCH_QUANTITY if index < len(operations) else None,
+                    min_transfer_quantity_to_next=(
+                        TRANSFER_BATCH_QUANTITY if index < len(operations) else None
+                    ),
                 )
             )
         session.flush()
@@ -281,7 +301,15 @@ def _positive_route_operations(spec: RouteSpec) -> list[tuple[str, float]]:
 
 def _seed_orders(session: Session, routes: dict[str, Route]) -> None:
     today = date.today()
-    for order_number, client_name, product_name, quantity, due_in_days, route_name in ORDER_SPECS:
+    next_priority = int(session.scalar(select(func.max(Order.priority))) or 0) + 1
+    for (
+        order_number,
+        client_name,
+        product_name,
+        quantity,
+        due_in_days,
+        route_name,
+    ) in ORDER_SPECS:
         order = session.scalar(select(Order).where(Order.order_number == order_number))
         shipment_date = today + timedelta(days=due_in_days)
         if order is None:
@@ -294,8 +322,10 @@ def _seed_orders(session: Session, routes: dict[str, Route]) -> None:
                     shipment_date=shipment_date,
                     route_id=routes[route_name].id,
                     status=ORDER_STATUS_NEW,
+                    priority=next_priority,
                 )
             )
+            next_priority += 1
         else:
             order.client_name = client_name
             order.product_name = product_name
@@ -304,6 +334,10 @@ def _seed_orders(session: Session, routes: dict[str, Route]) -> None:
             order.route_id = routes[route_name].id
             order.status = ORDER_STATUS_NEW
             order.calculated_start_date = None
+    session.flush()
+    # Keep the user's relative order, append newly seeded rows, and repair any
+    # legacy zero/duplicate/gapped values before the first planning run.
+    OrdersRepository(session).normalize_priorities()
 
 
 def _seed_settings(session: Session) -> None:
@@ -321,7 +355,9 @@ def _seed_settings(session: Session) -> None:
 
 def main() -> None:
     """Create the database schema and insert the Excel-based seed data."""
-    parser = argparse.ArgumentParser(description="Load Excel-based seed data into the local SQLite database.")
+    parser = argparse.ArgumentParser(
+        description="Load Excel-based seed data into the local SQLite database."
+    )
     parser.add_argument(
         "--reset",
         action="store_true",

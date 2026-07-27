@@ -11,11 +11,25 @@ from app.constants import (
 )
 from app.db.models import Order, Route
 from app.ui.pages.orders_page import (
+    _row_changed,
+    _split_child_quantities,
     apply_order_status_overrides,
     build_order_editor_rows,
     order_status_options_for_row,
     validate_order_editor_row,
 )
+
+
+def test_fractional_child_quantities_preserve_exact_total() -> None:
+    quantities = _split_child_quantities(10.5, 3.2)
+    assert quantities == pytest.approx([3.2, 3.2, 3.2, 0.9])
+    assert sum(quantities) == pytest.approx(10.5)
+
+
+def test_calculated_start_does_not_make_unchanged_row_dirty() -> None:
+    order = _order()
+    order.calculated_start_date = date(2026, 7, 5)
+    assert not _row_changed(_order_row(order), order)
 
 
 def test_status_dropdown_displays_all_current_statuses() -> None:
@@ -195,7 +209,7 @@ def _order_row(order: Order, *, selected: bool = False) -> dict:
         "Связанная группа": bool(order.is_linked_child_group),
         "Маршрут": order.route.name,
         "Статус": order.status,
-        "Дата запуска": order.calculated_start_date,
+        "Дата запуска": order.fixed_start_date,
         "Конфликт": False,
     }
 
@@ -405,13 +419,19 @@ def test_save_button_recalculates_even_when_no_rows_changed(monkeypatch) -> None
     order = _order()
     monkeypatch.setattr(orders_page, "st", fake_st)
     monkeypatch.setattr(
-        orders_page, "recalculate_after_save", lambda value: recalculations.append(value)
+        orders_page,
+        "recalculate_after_save",
+        lambda value: recalculations.append(value),
     )
 
     with pytest.raises(_RerunRequested):
         orders_page._process_editor_changes(
-            session, repository, [order], [_order_row(order)],
-            {order.route.name: order.route}, save_requested=True,
+            session,
+            repository,
+            [order],
+            [_order_row(order)],
+            {order.route.name: order.route},
+            save_requested=True,
         )
 
     assert repository.updated == []
