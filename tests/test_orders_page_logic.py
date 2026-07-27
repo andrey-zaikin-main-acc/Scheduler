@@ -70,6 +70,7 @@ def test_order_editor_rows_include_selection_and_editable_fields() -> None:
     assert rows[0] == {
         "Выбран": True,
         "ID": 10,
+        "Приоритет": None,
         "Номер": "O-10",
         "Клиент": "Клиент",
         "Продукция": "Продукт",
@@ -187,7 +188,11 @@ def _order_row(order: Order, *, selected: bool = False) -> dict:
         "Клиент": order.client_name,
         "Продукция": order.product_name,
         "Тираж": float(order.quantity),
+        "Приоритет": order.priority or 1,
+        "Режим планирования": order.planning_mode,
         "Срок отгрузки": order.shipment_date,
+        "Группа": order.child_group_key or "",
+        "Связанная группа": bool(order.is_linked_child_group),
         "Маршрут": order.route.name,
         "Статус": order.status,
         "Дата запуска": order.calculated_start_date,
@@ -199,6 +204,7 @@ def _order(route: Route | None = None) -> Order:
     route = route or Route(id=1, name="наша сборка")
     return Order(
         id=10,
+        priority=1,
         order_number="O-10",
         client_name="Клиент",
         product_name="Продукт",
@@ -387,6 +393,30 @@ def test_reopening_after_save_without_save_button_does_not_recalculate(
 
     assert repository.updated == []
     assert recalculations == []
+
+
+def test_save_button_recalculates_even_when_no_rows_changed(monkeypatch) -> None:
+    import app.ui.pages.orders_page as orders_page
+
+    fake_st = _FakeStreamlit()
+    repository = _FakeOrdersRepository()
+    session = _FakeSession()
+    recalculations = []
+    order = _order()
+    monkeypatch.setattr(orders_page, "st", fake_st)
+    monkeypatch.setattr(
+        orders_page, "recalculate_after_save", lambda value: recalculations.append(value)
+    )
+
+    with pytest.raises(_RerunRequested):
+        orders_page._process_editor_changes(
+            session, repository, [order], [_order_row(order)],
+            {order.route.name: order.route}, save_requested=True,
+        )
+
+    assert repository.updated == []
+    assert session.commits == 1
+    assert recalculations == [session]
 
 
 class _FakeColumn:

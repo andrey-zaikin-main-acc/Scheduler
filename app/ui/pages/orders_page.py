@@ -26,6 +26,7 @@ from app.ui.pages.page_utils import recalculate_after_save
 EDITOR_COLUMNS = [
     "Выбран",
     "ID",
+    "Приоритет",
     "Номер",
     "Клиент",
     "Продукция",
@@ -42,31 +43,6 @@ EDITOR_COLUMNS = [
 DRAFT_ORDER_SESSION_KEY = "orders_page_show_new_order_form"
 SELECTED_ORDER_SESSION_KEY = "orders_page_selected_order_id"
 ORDER_EDITOR_KEY = "orders_page_editor"
-
-ORDER_EEDITOR_COLUMNS = [
-    "Выбран",
-    "ID",
-    "Номер",
-    "Клиент",
-    "Продукция",
-    "Тираж",
-    "Режим планирования",
-    "Дата запуска",
-    "Срок отгрузки",
-    "Группа",
-    "Связанная группа",
-    "Маршрут",
-    "Статус",
-    "Конфликт",
-]
-
-DRAFT_ROW_SESSION_KEY = "orders_page_has_draft_row"
-SELECTED_ORDER_SESSION_KEY = "orders_page_selected_order_id"
-
-
-def render_orders_page() -> None:
-    """Render an editable orders registry."""
-
 
 def render_orders_page() -> None:
     """Render the orders registry with inline editing controls."""
@@ -86,7 +62,7 @@ def render_orders_page() -> None:
             session.scalars(
                 select(Order)
                 .options(selectinload(Order.route), selectinload(Order.conflicts))
-                .order_by(Order.shipment_date, Order.id)
+                .order_by(Order.priority, Order.id)
             ).all()
         )
 
@@ -95,29 +71,6 @@ def render_orders_page() -> None:
         if selected_order_id not in {order.id for order in orders}:
             selected_order_id = None
             st.session_state[SELECTED_ORDER_SESSION_KEY] = None
-
-        add_col, delete_col = st.columns(2)
-        with add_col:
-            if st.button(
-                "Добавить заказ", use_container_width=True, disabled=not routes
-            ):
-                st.session_state[DRAFT_ORDER_SESSION_KEY] = True
-                st.rerun()
-        with delete_col:
-            if st.button(
-                "Удалить заказ",
-                use_container_width=True,
-                disabled=selected_order_id is None,
-            ):
-                if selected_order_id is not None and repository.delete_order(
-                    int(selected_order_id)
-                ):
-                    session.commit()
-                    _clear_route_capacity_cache()
-                    recalculate_after_save(session)
-                    st.session_state[SELECTED_ORDER_SESSION_KEY] = None
-                    st.rerun()
-                st.error("Выбранный заказ не найден.")
 
         _render_route_capacity_check(session, routes)
 
@@ -132,64 +85,88 @@ def render_orders_page() -> None:
         rows = build_order_editor_rows(
             orders, selected_order_id=selected_order_id, include_draft=False
         )
+        edited_rows = rows
         if not rows:
             st.info(
                 "Заказы пока не заведены. Нажмите «Добавить заказ» или загрузите demo-данные."
             )
-            return
-
-        _sync_order_editor_state(rows)
-
-        edited_rows = st.data_editor(
-            rows,
-            key=ORDER_EDITOR_KEY,
-            use_container_width=True,
-            hide_index=True,
-            disabled=["ID", "Конфликт", "Группа", "Связанная группа"],
-            column_order=EDITOR_COLUMNS,
-            num_rows="fixed",
-            column_config={
-                "Выбран": st.column_config.CheckboxColumn(
-                    "Выбран", help="Отметьте один заказ для удаления."
-                ),
-                "ID": st.column_config.NumberColumn("ID", disabled=True),
-                "Тираж": st.column_config.NumberColumn(
-                    "Тираж", min_value=0.01, step=100.0
-                ),
-                "Срок отгрузки": st.column_config.DateColumn(
-                    "Срок отгрузки", format="DD.MM.YYYY"
-                ),
-                "Маршрут": st.column_config.SelectboxColumn(
-                    "Маршрут", options=list(route_by_name)
-                ),
-                "Статус": st.column_config.SelectboxColumn(
-                    "Статус",
-                    options=list(ORDER_STATUSES),
-                    help=(
-                        "Вручную можно сохранить только «Новый» или «Отменён». "
-                        "«Запланирован» назначается системой после пересчёта."
+        else:
+            _sync_order_editor_state(rows)
+            edited_rows = st.data_editor(
+                rows,
+                key=ORDER_EDITOR_KEY,
+                use_container_width=True,
+                hide_index=True,
+                disabled=["ID", "Конфликт", "Группа", "Связанная группа"],
+                column_order=EDITOR_COLUMNS,
+                num_rows="fixed",
+                column_config={
+                    "Выбран": st.column_config.CheckboxColumn(
+                        "Выбран", help="Отметьте один заказ для удаления."
                     ),
-                ),
-                "Режим планирования": st.column_config.SelectboxColumn("Режим планирования", options=list(PLANNING_MODES)),
-                "Дата запуска": st.column_config.DateColumn("Дата запуска", format="DD.MM.YYYY"),
-                "Группа": st.column_config.TextColumn("Группа", disabled=True),
-                "Связанная группа": st.column_config.CheckboxColumn("Связанная группа", disabled=True),
-                "Конфликт": st.column_config.CheckboxColumn("Конфликт", disabled=True),
-            },
-        )
+                    "ID": st.column_config.NumberColumn("ID", disabled=True),
+                    "Приоритет": st.column_config.NumberColumn(
+                        "Приоритет", min_value=1, max_value=len(rows), step=1
+                    ),
+                    "Тираж": st.column_config.NumberColumn(
+                        "Тираж", min_value=0.01, step=100.0
+                    ),
+                    "Срок отгрузки": st.column_config.DateColumn(
+                        "Срок отгрузки", format="DD.MM.YYYY"
+                    ),
+                    "Маршрут": st.column_config.SelectboxColumn(
+                        "Маршрут", options=list(route_by_name)
+                    ),
+                    "Статус": st.column_config.SelectboxColumn(
+                        "Статус", options=list(ORDER_STATUSES)
+                    ),
+                    "Режим планирования": st.column_config.SelectboxColumn(
+                        "Режим планирования", options=list(PLANNING_MODES)
+                    ),
+                    "Дата запуска": st.column_config.DateColumn(
+                        "Дата запуска", format="DD.MM.YYYY"
+                    ),
+                    "Группа": st.column_config.TextColumn("Группа", disabled=True),
+                    "Связанная группа": st.column_config.CheckboxColumn(
+                        "Связанная группа", disabled=True
+                    ),
+                    "Конфликт": st.column_config.CheckboxColumn(
+                        "Конфликт", disabled=True
+                    ),
+                },
+            )
+
+        add_col, delete_col = st.columns(2)
+        with add_col:
+            if st.button("Добавить заказ", use_container_width=True, disabled=not routes):
+                st.session_state[DRAFT_ORDER_SESSION_KEY] = True
+                st.rerun()
+        with delete_col:
+            if st.button(
+                "Удалить заказ", use_container_width=True,
+                disabled=selected_order_id is None,
+            ):
+                if selected_order_id is not None and repository.delete_order(int(selected_order_id)):
+                    session.commit()
+                    _clear_orders_page_state()
+                    recalculate_after_save(session)
+                    st.rerun()
+                st.error("Выбранный заказ не найден.")
+
         save_requested = st.button(
             "Сохранить изменения и пересчитать план",
             use_container_width=True,
             disabled=not routes,
         )
-        _process_editor_changes(
-            session,
-            repository,
-            orders,
-            edited_rows,
-            route_by_name,
-            save_requested=save_requested,
-        )
+        if rows:
+            _process_editor_changes(
+                session,
+                repository,
+                orders,
+                edited_rows,
+                route_by_name,
+                save_requested=save_requested,
+            )
 
 
 NEW_ORDER_DEFAULTS = {
@@ -278,7 +255,8 @@ def _save_new_order_form(session, repository: OrdersRepository, state: dict[str,
     session.commit()
     _clear_route_capacity_cache()
     st.success("Заказ сохранён. Пересчёт плана не запускался.")
-    st.session_state.pop(_ORDER_EDITOR_SIGNATURE_SESSION_KEY, None)
+    _clear_orders_page_state(close_form=True)
+    st.rerun()
 
 
 _ORDER_EDITOR_SIGNATURE_SESSION_KEY = "orders_page_editor_signature"
@@ -350,6 +328,7 @@ def build_order_editor_rows(
             {
                 "Выбран": False,
                 "ID": None,
+                "Приоритет": len(orders) + 1,
                 "Номер": "",
                 "Клиент": "",
                 "Продукция": "",
@@ -383,6 +362,7 @@ def validate_order_editor_row(
     route_name = row.get("Маршрут")
     status = row.get("Статус")
     quantity = _parse_quantity(row.get("Тираж"))
+    priority = _parse_priority(row.get("Приоритет"))
 
     if not order_number:
         errors.append("Номер заказа обязателен.")
@@ -395,6 +375,8 @@ def validate_order_editor_row(
         errors.append("Продукция обязательна.")
     if quantity is None or quantity <= 0:
         errors.append("Тираж должен быть больше 0.")
+    if current_order_id is not None and "Приоритет" in row and priority is None:
+        errors.append("Приоритет должен быть целым числом не меньше 1.")
     if row.get("Режим планирования") == PLANNING_MODE_START:
         if not isinstance(row.get("Дата запуска"), date):
             errors.append("Дата запуска обязательна.")
@@ -425,6 +407,10 @@ def _process_editor_changes(
     save_requested: bool,
 ) -> None:
     original_by_id = {order.id: order for order in orders}
+    original_priorities = {
+        order.id: (order.priority or index)
+        for index, order in enumerate(orders, start=1)
+    }
     existing_numbers = {order.order_number: order.id for order in orders}
     selected_ids = [
         int(row["ID"])
@@ -439,9 +425,11 @@ def _process_editor_changes(
     if not save_requested:
         return
 
-    saved_changes = False
+    # Validate the complete editor snapshot before mutating any ORM object.
     for row in edited_rows:
         order_id = row.get("ID")
+        if order_id is not None and "Приоритет" not in row:
+            row["Приоритет"] = original_priorities[int(order_id)]
         if order_id is None:
             if _is_blank_draft_row(row):
                 st.warning(
@@ -458,13 +446,8 @@ def _process_editor_changes(
                 for error in errors:
                     st.error(error)
                 return
-            repository.create_order(**_row_to_order_payload(row, route_by_name))
-            saved_changes = True
-            st.session_state[DRAFT_ORDER_SESSION_KEY] = False
-            continue
-
-        order = original_by_id.get(int(order_id))
-        if order is not None and _row_changed(row, order):
+        order = original_by_id.get(int(order_id)) if order_id is not None else None
+        if order is not None:
             errors = validate_order_editor_row(
                 row,
                 route_names=set(route_by_name),
@@ -476,6 +459,15 @@ def _process_editor_changes(
                 for error in errors:
                     st.error(error)
                 return
+
+    for row in edited_rows:
+        order_id = row.get("ID")
+        if order_id is None:
+            repository.create_order(**_row_to_order_payload(row, route_by_name))
+            st.session_state[DRAFT_ORDER_SESSION_KEY] = False
+            continue
+        order = original_by_id.get(int(order_id))
+        if order is not None and _row_changed(row, order):
             payload = _row_to_order_payload(
                 row, route_by_name, original_status=order.status
             )
@@ -488,14 +480,30 @@ def _process_editor_changes(
                 }
             )
             repository.update_order(order.id, **payload)
-            saved_changes = True
 
-    if saved_changes:
-        session.commit()
-        _clear_route_capacity_cache()
-        recalculate_after_save(session)
-        st.session_state.pop(_ORDER_EDITOR_SIGNATURE_SESSION_KEY, None)
-        st.rerun()
+    # Apply explicit moves against the immutable editor-opening sequence.  This
+    # prevents shifts caused by an earlier move from being mistaken for another
+    # user request while iterating through the remaining rows.
+    for row in edited_rows:
+        order_id = row.get("ID")
+        requested = _parse_priority(row.get("Приоритет"))
+        if (
+            order_id is not None
+            and requested is not None
+            and requested != original_priorities.get(int(order_id))
+        ):
+            repository.move_order(int(order_id), requested)
+
+    if hasattr(repository, "normalize_priorities"):
+        repository.normalize_priorities()
+    # The planner must start only after all editor writes are durably committed.
+    session.commit()
+    if hasattr(session, "expire_all"):
+        session.expire_all()
+    _clear_route_capacity_cache()
+    recalculate_after_save(session)
+    _clear_orders_page_state()
+    st.rerun()
 
 
 def _row_to_order_payload(
@@ -533,6 +541,7 @@ def _row_changed(row: dict[str, Any], order: Order) -> bool:
             row.get("Режим планирования") != order.planning_mode,
             row.get("Маршрут") != route_name,
             row.get("Статус") != order.status,
+            _parse_priority(row.get("Приоритет")) != order.priority,
         ]
     )
 
@@ -549,6 +558,24 @@ def _parse_quantity(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_priority(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+        return parsed if parsed >= 1 and float(value) == parsed else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _clear_orders_page_state(*, close_form: bool = False) -> None:
+    """Discard DB-dependent widget snapshots before the next Streamlit run."""
+    _clear_route_capacity_cache()
+    st.session_state.pop(ORDER_EDITOR_KEY, None)
+    st.session_state.pop(_ORDER_EDITOR_SIGNATURE_SESSION_KEY, None)
+    st.session_state[SELECTED_ORDER_SESSION_KEY] = None
+    if close_form:
+        st.session_state[DRAFT_ORDER_SESSION_KEY] = False
 
 
 ROUTE_CAPACITY_RESULT_SESSION_KEY = "orders_route_capacity_result"

@@ -21,6 +21,7 @@ class Order(Base):
     __tablename__ = "orders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False, index=True)
     order_number: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     client_name: Mapped[str] = mapped_column(String(255), nullable=False)
     product_name: Mapped[str] = mapped_column(String(255), nullable=False)

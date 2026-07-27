@@ -12,6 +12,7 @@ class PlanningOrder:
     quantity: float
     shipment_date: date
     status: str
+    priority: int = 0
     planning_mode: str = "От даты отгрузки"
     fixed_start_date: date | None = None
     child_group_key: str | None = None
