@@ -33,7 +33,8 @@ EDITOR_COLUMNS = [
     "Продукция",
     "Тираж",
     "Режим планирования",
-    "Дата запуска",
+    "Фиксированная дата запуска",
+    "Расчётная дата запуска",
     "Срок отгрузки",
     "Группа",
     "Связанная группа",
@@ -44,6 +45,13 @@ EDITOR_COLUMNS = [
 DRAFT_ORDER_SESSION_KEY = "orders_page_show_new_order_form"
 SELECTED_ORDER_SESSION_KEY = "orders_page_selected_order_id"
 ORDER_EDITOR_KEY = "orders_page_editor"
+READ_ONLY_EDITOR_COLUMNS = [
+    "ID",
+    "Расчётная дата запуска",
+    "Конфликт",
+    "Группа",
+    "Связанная группа",
+]
 
 
 def render_orders_page() -> None:
@@ -99,7 +107,7 @@ def render_orders_page() -> None:
                 key=ORDER_EDITOR_KEY,
                 use_container_width=True,
                 hide_index=True,
-                disabled=["ID", "Конфликт", "Группа", "Связанная группа"],
+                disabled=READ_ONLY_EDITOR_COLUMNS,
                 column_order=EDITOR_COLUMNS,
                 num_rows="fixed",
                 column_config={
@@ -125,8 +133,11 @@ def render_orders_page() -> None:
                     "Режим планирования": st.column_config.SelectboxColumn(
                         "Режим планирования", options=list(PLANNING_MODES)
                     ),
-                    "Дата запуска": st.column_config.DateColumn(
-                        "Дата запуска", format="DD.MM.YYYY"
+                    "Фиксированная дата запуска": st.column_config.DateColumn(
+                        "Фиксированная дата запуска", format="DD.MM.YYYY"
+                    ),
+                    "Расчётная дата запуска": st.column_config.DateColumn(
+                        "Расчётная дата запуска", format="DD.MM.YYYY", disabled=True
                     ),
                     "Группа": st.column_config.TextColumn("Группа", disabled=True),
                     "Связанная группа": st.column_config.CheckboxColumn(
@@ -475,7 +486,8 @@ def build_order_editor_rows(
                 "Продукция": "",
                 "Тираж": 0.0,
                 "Режим планирования": PLANNING_MODE_SHIPMENT,
-                "Дата запуска": None,
+                "Фиксированная дата запуска": None,
+                "Расчётная дата запуска": None,
                 "Срок отгрузки": None,
                 "Группа": "",
                 "Связанная группа": False,
@@ -519,8 +531,8 @@ def validate_order_editor_row(
     if current_order_id is not None and "Приоритет" in row and priority is None:
         errors.append("Приоритет должен быть целым числом не меньше 1.")
     if row.get("Режим планирования") == PLANNING_MODE_START:
-        if not isinstance(row.get("Дата запуска"), date):
-            errors.append("Дата запуска обязательна.")
+        if not isinstance(row.get("Фиксированная дата запуска"), date):
+            errors.append("Фиксированная дата запуска обязательна.")
     elif not isinstance(row.get("Срок отгрузки"), date):
         errors.append("Срок отгрузки обязателен.")
     if not route_name or route_name not in route_names:
@@ -659,10 +671,11 @@ def _row_to_order_payload(
         "client_name": str(row["Клиент"]).strip(),
         "product_name": str(row["Продукция"]).strip(),
         "quantity": float(row["Тираж"]),
-        "shipment_date": row["Срок отгрузки"] or row.get("Дата запуска"),
+        "shipment_date": row["Срок отгрузки"]
+        or row.get("Фиксированная дата запуска"),
         "planning_mode": row.get("Режим планирования") or PLANNING_MODE_SHIPMENT,
         "fixed_start_date": (
-            row.get("Дата запуска")
+            row.get("Фиксированная дата запуска")
             if row.get("Режим планирования") == PLANNING_MODE_START
             else None
         ),
@@ -682,7 +695,7 @@ def _row_changed(row: dict[str, Any], order: Order) -> bool:
             str(row.get("Продукция") or "").strip() != order.product_name,
             _parse_quantity(row.get("Тираж")) != float(order.quantity),
             row.get("Срок отгрузки") != order.shipment_date,
-            row.get("Дата запуска") != order.fixed_start_date,
+            row.get("Фиксированная дата запуска") != order.fixed_start_date,
             row.get("Режим планирования") != order.planning_mode,
             row.get("Маршрут") != route_name,
             row.get("Статус") != order.status,

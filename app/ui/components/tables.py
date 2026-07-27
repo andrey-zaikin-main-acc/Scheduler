@@ -24,8 +24,9 @@ def order_rows(orders: list[Order]) -> list[dict[str, object]]:
             "Продукция": order.product_name,
             "Тираж": order.quantity,
             "Режим планирования": order.planning_mode or "От даты отгрузки",
-            # Never put a calculated value into the editable fixed-start field.
-            "Дата запуска": order.fixed_start_date,
+            # Keep the editable scheduling constraint separate from planner output.
+            "Фиксированная дата запуска": order.fixed_start_date,
+            "Расчётная дата запуска": order.calculated_start_date,
             "Срок отгрузки": order.shipment_date,
             "Группа": order.child_group_key or "",
             "Связанная группа": bool(order.is_linked_child_group),

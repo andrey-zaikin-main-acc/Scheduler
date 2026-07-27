@@ -8,6 +8,8 @@ from app.constants import (
     ORDER_STATUS_NEW,
     ORDER_STATUS_PLANNED,
     MANUAL_ORDER_STATUSES,
+    PLANNING_MODE_SHIPMENT,
+    PLANNING_MODE_START,
 )
 from app.db.models import Order, Route
 from app.ui.pages.orders_page import (
@@ -16,6 +18,7 @@ from app.ui.pages.orders_page import (
     apply_order_status_overrides,
     build_order_editor_rows,
     order_status_options_for_row,
+    READ_ONLY_EDITOR_COLUMNS,
     validate_order_editor_row,
 )
 
@@ -30,6 +33,49 @@ def test_calculated_start_does_not_make_unchanged_row_dirty() -> None:
     order = _order()
     order.calculated_start_date = date(2026, 7, 5)
     assert not _row_changed(_order_row(order), order)
+
+
+def test_shipment_planning_row_displays_calculated_start_date() -> None:
+    order = _order()
+    order.planning_mode = PLANNING_MODE_SHIPMENT
+    order.calculated_start_date = date(2026, 7, 5)
+
+    row = build_order_editor_rows(
+        [order], selected_order_id=None, include_draft=False
+    )[0]
+
+    assert row["Фиксированная дата запуска"] is None
+    assert row["Расчётная дата запуска"] == date(2026, 7, 5)
+
+
+def test_start_planning_row_displays_fixed_and_calculated_start_dates() -> None:
+    order = _order()
+    order.planning_mode = PLANNING_MODE_START
+    order.fixed_start_date = date(2026, 7, 5)
+    order.calculated_start_date = date(2026, 7, 5)
+
+    row = build_order_editor_rows(
+        [order], selected_order_id=None, include_draft=False
+    )[0]
+
+    assert row["Фиксированная дата запуска"] == date(2026, 7, 5)
+    assert row["Расчётная дата запуска"] == date(2026, 7, 5)
+
+
+def test_calculated_start_column_is_read_only() -> None:
+    assert "Расчётная дата запуска" in READ_ONLY_EDITOR_COLUMNS
+
+
+def test_unchanged_calculated_start_is_never_copied_to_fixed_start() -> None:
+    import app.ui.pages.orders_page as orders_page
+
+    order = _order()
+    order.calculated_start_date = date(2026, 7, 5)
+    row = _order_row(order)
+
+    assert not _row_changed(row, order)
+    payload = orders_page._row_to_order_payload(row, {order.route.name: order.route})
+    assert payload["fixed_start_date"] is None
 
 
 def test_status_dropdown_displays_all_current_statuses() -> None:
@@ -90,7 +136,8 @@ def test_order_editor_rows_include_selection_and_editable_fields() -> None:
         "Продукция": "Продукт",
         "Тираж": 1000,
         "Режим планирования": "От даты отгрузки",
-        "Дата запуска": None,
+        "Фиксированная дата запуска": None,
+        "Расчётная дата запуска": None,
         "Срок отгрузки": date(2026, 7, 10),
         "Группа": "",
         "Связанная группа": False,
@@ -109,7 +156,8 @@ def test_validate_order_editor_row_rejects_duplicate_order_number() -> None:
         "Продукция": "Продукт",
         "Тираж": 1000,
         "Режим планирования": "От даты отгрузки",
-        "Дата запуска": None,
+        "Фиксированная дата запуска": None,
+        "Расчётная дата запуска": None,
         "Срок отгрузки": date(2026, 7, 10),
         "Группа": "",
         "Связанная группа": False,
@@ -134,7 +182,8 @@ def test_validate_order_editor_row_accepts_current_order_number_on_update() -> N
         "Продукция": "Продукт",
         "Тираж": 1000,
         "Режим планирования": "От даты отгрузки",
-        "Дата запуска": None,
+        "Фиксированная дата запуска": None,
+        "Расчётная дата запуска": None,
         "Срок отгрузки": date(2026, 7, 10),
         "Группа": "",
         "Связанная группа": False,
@@ -209,7 +258,8 @@ def _order_row(order: Order, *, selected: bool = False) -> dict:
         "Связанная группа": bool(order.is_linked_child_group),
         "Маршрут": order.route.name,
         "Статус": order.status,
-        "Дата запуска": order.fixed_start_date,
+        "Фиксированная дата запуска": order.fixed_start_date,
+        "Расчётная дата запуска": order.calculated_start_date,
         "Конфликт": False,
     }
 
@@ -610,7 +660,8 @@ def test_validate_new_order_rejects_calculated_statuses() -> None:
         "Продукция": "Продукт",
         "Тираж": 1000,
         "Режим планирования": "От даты отгрузки",
-        "Дата запуска": None,
+        "Фиксированная дата запуска": None,
+        "Расчётная дата запуска": None,
         "Срок отгрузки": date(2026, 7, 10),
         "Группа": "",
         "Связанная группа": False,
@@ -633,7 +684,8 @@ def test_validate_existing_order_allows_only_manual_statuses() -> None:
         "Продукция": "Продукт",
         "Тираж": 1000,
         "Режим планирования": "От даты отгрузки",
-        "Дата запуска": None,
+        "Фиксированная дата запуска": None,
+        "Расчётная дата запуска": None,
         "Срок отгрузки": date(2026, 7, 10),
         "Группа": "",
         "Связанная группа": False,
@@ -781,3 +833,4 @@ def test_editor_signature_changes_after_recalculated_status_update() -> None:
         rows_before
     ) != orders_page._order_editor_rows_signature(rows_after)
     assert rows_after[0]["Статус"] == ORDER_STATUS_PLANNED
+    assert rows_after[0]["Расчётная дата запуска"] == date(2026, 7, 8)
