@@ -20,6 +20,7 @@ class DraftBundle:
     orders: list[dict[str, Any]] = field(default_factory=list)
     pending_delete_ids: set[int] = field(default_factory=set)
     routes: list[dict[str, Any]] = field(default_factory=list)
+    operations: list[dict[str, Any]] = field(default_factory=list)
     work_centers: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -45,8 +46,10 @@ class DraftCommitService:
         try:
             if "orders" in sections:
                 self._apply_orders(draft)
-            # Route/work-center page adapters apply their rows before invoking
-            # this coordinator; their validation is still section-isolated.
+            if "work_centers" in sections:
+                self._apply_work_centers(draft)
+            if "routes" in sections:
+                self._apply_routes(draft)
             summary = self.recalculation_factory(self.session).recalculate_plan()
             self.session.commit()
             return DraftCommitResult(True, summary=summary)
@@ -59,6 +62,8 @@ class DraftCommitService:
         if "orders" not in sections:
             return errors
         route_ids = set(self.session.scalars(select(Route.id)).all())
+        active_route_ids = set(self.session.scalars(select(Route.id).where(Route.is_active.is_(True))).all())
+        existing_orders = {order.id: order for order in self.session.scalars(select(Order)).all()}
         existing_statuses = {
             order.id: order.status for order in self.session.scalars(select(Order)).all()
         }
@@ -79,6 +84,8 @@ class DraftCommitService:
             numbers[number] = index
             if row.get("route_id") not in route_ids:
                 errors.append(f"{label}: поле route_id содержит неизвестный маршрут.")
+            elif row.get("id") not in existing_orders and row.get("route_id") not in active_route_ids:
+                errors.append(f"{label}: неактивный маршрут нельзя назначить новому заказу.")
             status = row.get("status")
             unchanged_system_status = (
                 status in ("", None)
@@ -99,7 +106,72 @@ class DraftCommitService:
                     errors.append(f"{label}: поле fixed_start_date должно быть пустым для режима от даты отгрузки.")
             else:
                 errors.append(f"{label}: неизвестный режим планирования.")
+            existing = existing_orders.get(row.get("id"))
+            if existing is not None and existing.status in ("", None) and status not in MANUAL_ORDER_STATUSES:
+                protected_changed = any((
+                    float(row.get("quantity") or 0) != float(existing.quantity),
+                    row.get("route_id") != existing.route_id,
+                    mode != existing.planning_mode,
+                    row.get("fixed_start_date") != existing.fixed_start_date,
+                    row.get("shipment_date") != existing.shipment_date,
+                    (row.get("child_group_key") or None) != existing.child_group_key,
+                    bool(row.get("is_linked_child_group")) != existing.is_linked_child_group,
+                ))
+                if protected_changed:
+                    errors.append(f"{label}: плановые параметры рассчитанного заказа можно менять только после установки статуса Новый.")
         return errors
+
+    def _apply_work_centers(self, draft: DraftBundle) -> None:
+        from datetime import time
+        from app.repositories.work_centers_repository import WorkCentersRepository
+        repository = WorkCentersRepository(self.session)
+        existing = {item.id: item for item in repository.list_work_centers()}
+        for row in draft.work_centers:
+            name = str(row.get("Название") or "").strip()
+            hours = float(row.get("Доступное время в месяц") or 0)
+            if not name or hours <= 0:
+                raise ValueError("Участок: название и доступное время обязательны.")
+            payload = dict(name=name, available_hours_per_day=hours,
+                           workday_start_time=time(9), is_active=bool(row.get("Активен", True)),
+                           prevent_order_interruption=bool(row.get("Нельзя прерывать заказ при планировании")))
+            if row.get("ID") in existing:
+                repository.update_work_center(int(row["ID"]), **payload)
+            else:
+                repository.create_work_center(**payload)
+
+    def _apply_routes(self, draft: DraftBundle) -> None:
+        from app.repositories.routes_repository import RoutesRepository
+        repository = RoutesRepository(self.session)
+        existing = {item.id: item for item in repository.list_routes_with_operations()}
+        for row in draft.routes:
+            name = str(row.get("Название") or "").strip()
+            if not name:
+                raise ValueError("Маршрут: название обязательно.")
+            payload = dict(name=name, description=str(row.get("Описание") or "").strip() or None,
+                           is_active=bool(row.get("Активен", True)))
+            if row.get("ID") in existing:
+                repository.update_route(int(row["ID"]), **payload)
+            else:
+                repository.create_route(**payload)
+        work_centers = {item.name: item for item in __import__(
+            "app.repositories.work_centers_repository", fromlist=["WorkCentersRepository"]
+        ).WorkCentersRepository(self.session).list_work_centers() if item.is_active}
+        from app.db.models import RouteOperation
+        existing_operations = {op.id: op for op in self.session.scalars(select(RouteOperation)).all()}
+        for row in draft.operations:
+            center = work_centers.get(row.get("Участок"))
+            if center is None:
+                raise ValueError("Операция: выберите активный участок.")
+            payload = dict(sequence_number=int(row.get("№") or 0), work_center_id=center.id,
+                           labor_hours_per_1000=float(row.get("Трудоёмкость на 1000") or 0),
+                           min_transfer_quantity_to_next=float(row.get("Мин. передаточная партия") or 0) or None,
+                           is_active=bool(row.get("Активна", True)))
+            if payload["sequence_number"] < 1 or payload["labor_hours_per_1000"] <= 0:
+                raise ValueError("Операция: номер и трудоёмкость должны быть больше нуля.")
+            if row.get("ID") in existing_operations:
+                repository.update_operation(int(row["ID"]), **payload)
+            else:
+                repository.add_operation(route_id=int(row["_route_id"]), **payload)
 
     def _apply_orders(self, draft: DraftBundle) -> None:
         repository = OrdersRepository(self.session)
@@ -113,6 +185,7 @@ class DraftCommitService:
                 "route_id", "status", "planning_mode", "fixed_start_date", "child_group_key",
                 "child_sequence_number", "is_child_order", "is_linked_child_group", "priority"
             )}
+            payload["status"] = payload["status"] or ""
             payload["shipment_date"] = payload["shipment_date"] if payload["planning_mode"] == PLANNING_MODE_SHIPMENT else None
             payload["fixed_start_date"] = payload["fixed_start_date"] if payload["planning_mode"] == PLANNING_MODE_START else None
             row_id = int(row.get("id") or -1)

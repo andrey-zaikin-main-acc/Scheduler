@@ -34,10 +34,19 @@ def commit_all_session_drafts() -> None:
         bundle = DraftBundle(
             orders=[_editor_row_to_draft(row, route_by_name) for row in rows],
             pending_delete_ids=set(st.session_state.get("orders_pending_delete_ids", set())),
+            routes=list(st.session_state.get("routes_draft_rows", [])),
+            operations=list(st.session_state.get("route_operations_draft_rows", [])),
+            work_centers=list(st.session_state.get("work_centers_draft_rows", [])),
         )
         result = DraftCommitService(session).commit(bundle)
         if result.ok:
-            st.session_state.pop("orders_draft_rows", None)
+            # Clear before rerun: Streamlit aborts execution at st.rerun().
+            for key in list(st.session_state):
+                if (key in {"orders_draft_rows", "routes_draft_rows", "route_operations_draft_rows",
+                            "work_centers_draft_rows", "orders_page_editor", "orders_page_editor_signature",
+                            "orders_route_capacity_result", "orders_route_capacity_slots"}
+                        or key.startswith("order_mode_") or key.startswith("order_date_")):
+                    st.session_state.pop(key, None)
             st.session_state["orders_pending_delete_ids"] = set()
             st.session_state["draft_flash"] = success_flash(result.summary)
             st.rerun()

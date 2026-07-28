@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.constants import ORDER_STATUS_NEW, PLANNABLE_ORDER_STATUSES
 from app.db.models import (
     Order,
+    PlannedOperation,
     PlannedOperationDay,
     RecalculationRun,
     Route,
@@ -348,7 +349,9 @@ class RouteCapacityService:
             )
         return self._build_capacity_calendar(planning_start_date, period_end)
 
-    def _build_capacity_calendar(self, start: date, end: date) -> CapacityCalendar:
+    def _build_capacity_calendar(
+        self, start: date, end: date, *, exclude_order_id: int | None = None
+    ) -> CapacityCalendar:
         work_centers = self.session.scalars(
             select(WorkCenter)
             .where(WorkCenter.is_active.is_(True))
@@ -357,11 +360,17 @@ class RouteCapacityService:
         calendar = CapacityCalendar(
             [map_work_center_to_planning(work_center) for work_center in work_centers]
         )
-        planned_days = self.session.scalars(
+        planned_days_query = (
             select(PlannedOperationDay)
+            .join(PlannedOperationDay.planned_operation)
             .where(PlannedOperationDay.date >= start, PlannedOperationDay.date <= end)
             .order_by(PlannedOperationDay.date, PlannedOperationDay.id)
-        ).all()
+        )
+        if exclude_order_id is not None:
+            planned_days_query = planned_days_query.where(
+                PlannedOperation.order_id != exclude_order_id
+            )
+        planned_days = self.session.scalars(planned_days_query).all()
         fallback_offset: dict[tuple[int, date], float] = defaultdict(float)
         for day in planned_days:
             key = (day.work_center_id, day.date)
@@ -406,13 +415,16 @@ class RouteCapacityService:
             .where(WorkCenter.is_active.is_(True))
             .order_by(WorkCenter.name)
         ).all()
-        calendar = CapacityCalendar(
-            [map_work_center_to_planning(work_center) for work_center in work_centers]
+        # Seed immutable saved placements first.  Calculated orders have the
+        # canonical empty manual status and therefore cannot be reconstructed by
+        # filtering PLANNABLE_ORDER_STATUSES.
+        calendar = self._build_capacity_calendar(
+            planning_start_date, date.max, exclude_order_id=exclude_order_id
         )
         engine = PlanningEngine(calendar, planning_start_date=planning_start_date)
         orders = self.session.scalars(
             select(Order)
-            .where(Order.status.in_(PLANNABLE_ORDER_STATUSES))
+            .where(Order.status == ORDER_STATUS_NEW)
             .where(
                 Order.id != exclude_order_id if exclude_order_id is not None else True
             )
@@ -425,7 +437,9 @@ class RouteCapacityService:
         ).all()
         prepared_orders = []
         for order in orders:
-            if order.route is None:
+            if (order.route is None or not order.route.is_active
+                    or any(not op.is_active or not op.work_center or not op.work_center.is_active
+                           for op in order.route.operations)):
                 continue
             try:
                 prepared_orders.append(

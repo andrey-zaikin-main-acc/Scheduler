@@ -169,7 +169,7 @@ class OrdersRepository:
             return
         # Empty is a system-owned result state.  It may be submitted unchanged
         # by the editor, but cannot be assigned to another order manually.
-        if status == "" and current_status in ("", None):
+        if status in ("", None) and current_status in ("", None):
             return
         if status == current_status and status in CALCULATED_ORDER_STATUSES:
             return

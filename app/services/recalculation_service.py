@@ -85,12 +85,30 @@ class RecalculationService:
             order_id: min(dates[0] for (oid, _), dates in previous_plan.items() if oid == order_id)
             for order_id in {key[0] for key in previous_plan}
         }
+        result_order_ids = set(previously_planned) | previously_conflicted
+        orphaned_system_orders = set(self.session.scalars(
+            select(Order.id).where(
+                or_(Order.status == "", Order.status.is_(None)),
+                ~Order.id.in_(result_order_ids),
+            )
+        ).all())
         self.plan_repository.clear_plan()
-        self.conflicts_repository.clear_conflicts()
+        # A conflict is a protected system result.  Keep it until the user
+        # explicitly returns that order to «Новый», cancels it, or deletes it.
+        retry_conflicts = set(self.session.scalars(
+            select(Order.id).where(Order.id.in_(previously_conflicted), Order.status == ORDER_STATUS_NEW)
+        ).all())
+        if retry_conflicts:
+            self.session.query(PlanningConflictModel).filter(
+                PlanningConflictModel.order_id.in_(retry_conflicts)
+            ).delete(synchronize_session=False)
         # Cancellation wins even when the order existed in the previous plan.
         for cancelled in self.session.scalars(
             select(Order).where(Order.status == ORDER_STATUS_CANCELLED)
         ):
+            self.session.query(PlanningConflictModel).filter_by(
+                order_id=cancelled.id
+            ).delete(synchronize_session=False)
             cancelled.priority = 0
             cancelled.calculated_start_date = None
             cancelled.calculated_shipment_date = None
@@ -110,7 +128,8 @@ class RecalculationService:
         # become the planner's sole queue criterion.
         self.orders_repository.normalize_priorities()
         prepared_orders, invalid_results = self._prepare_orders(
-            orders_by_id, set(previously_planned), previously_conflicted
+            orders_by_id, set(previously_planned) | orphaned_system_orders,
+            previously_conflicted - retry_conflicts
         )
         # Saved plan is protected from newly entered priority: old planned work is
         # rebuilt first in its previous chronological order.  A manual "Новый"
@@ -120,9 +139,10 @@ class RecalculationService:
         sorted_orders = tuple(sorted(protected, key=lambda p: (previously_planned[p.order.id], p.order.id))) + sort_prepared_orders(new)
 
         planned_order_count = 0
-        conflicted_order_count = 0
+        preserved_conflict_count = len(previously_conflicted - retry_conflicts)
+        conflicted_order_count = preserved_conflict_count
         planned_operation_count = 0
-        conflict_count = 0
+        conflict_count = preserved_conflict_count
 
         for invalid_result in invalid_results:
             self._persist_conflict_result(
@@ -189,7 +209,7 @@ class RecalculationService:
                 or_(
                     Order.status.in_(PLANNABLE_ORDER_STATUSES),
                     Order.id.in_(previously_planned_ids or set()),
-                    Order.id.in_(previously_conflicted_ids or set()),
+                    # Existing conflicts are deliberately not prepared again.
                 ),
                 Order.status != ORDER_STATUS_CANCELLED,
             )
@@ -311,7 +331,11 @@ class RecalculationService:
     ) -> None:
         order.status = ""
         order.priority = 0
-        order.calculated_start_date = result.calculated_start_date
+        order.calculated_start_date = (
+            None if order.planning_mode == PLANNING_MODE_START
+            else result.calculated_start_date
+        )
+        order.calculated_shipment_date = None
         if order.planning_mode == PLANNING_MODE_START and result.operations:
             order.calculated_shipment_date = max(
                 day.end_datetime
