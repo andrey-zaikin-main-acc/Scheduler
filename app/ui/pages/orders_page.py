@@ -38,6 +38,8 @@ EDITOR_COLUMNS = [
     "Расчётная дата запуска",
     "Расчётная дата отгрузки",
     "Группа",
+    "Номер в группе",
+    "Дочерний заказ",
     "Связанная группа",
     "Маршрут",
     "Статус",
@@ -50,10 +52,13 @@ ORDER_EDITOR_KEY = "orders_page_editor"
 READ_ONLY_EDITOR_COLUMNS = [
     "ID",
     "Расчётная дата запуска",
+    "Расчётная дата отгрузки",
     "Запланирован",
     "Конфликт планирования",
     "Группа",
     "Связанная группа",
+    "Номер в группе",
+    "Дочерний заказ",
 ]
 
 
@@ -78,6 +83,7 @@ def render_orders_page() -> None:
             st.session_state.orders_draft_rows = build_order_editor_rows(orders, selected_order_id=None, include_draft=False)
             st.session_state.orders_pending_delete_ids = set()
         rows = st.session_state.orders_draft_rows
+        _sync_order_editor_state(rows)
         edited = st.data_editor(rows, key=ORDER_EDITOR_KEY, use_container_width=True, hide_index=True,
             disabled=READ_ONLY_EDITOR_COLUMNS, column_order=EDITOR_COLUMNS, num_rows="fixed",
             column_config={
@@ -95,20 +101,6 @@ def render_orders_page() -> None:
                     pending.add(row["ID"])
             st.session_state.orders_draft_rows = [row for row in edited if not row.get("Выбран")]
             st.rerun()
-        if st.button("Сохранить все изменения и пересчитать план", use_container_width=True):
-            from app.services.draft_commit_service import DraftBundle, DraftCommitService, success_flash
-            bundle = DraftBundle(
-                orders=[_editor_row_to_draft(row, route_by_name) for row in edited],
-                pending_delete_ids=set(st.session_state.orders_pending_delete_ids),
-            )
-            result = DraftCommitService(session).commit(bundle, sections={"orders"})
-            if result.ok:
-                st.session_state.pop("orders_draft_rows", None)
-                st.session_state.orders_pending_delete_ids = set()
-                st.session_state.draft_flash = success_flash(result.summary)
-                st.rerun()
-            for error in result.errors:
-                st.error(error)
 
 
 def _editor_row_to_draft(row: dict[str, Any], route_by_name: dict[str, Route]) -> dict[str, Any]:
@@ -123,7 +115,7 @@ def _editor_row_to_draft(row: dict[str, Any], route_by_name: dict[str, Route]) -
         "route_id": route.id if route else None, "status": row.get("Статус"),
         "child_group_key": row.get("Группа") or None,
         "child_sequence_number": row.get("Номер в группе"),
-        "is_child_order": bool(row.get("Группа")),
+        "is_child_order": bool(row.get("Дочерний заказ", row.get("Группа"))),
         "is_linked_child_group": bool(row.get("Связанная группа")),
     }
 
@@ -201,7 +193,7 @@ def _render_new_order_form(
             format="DD.MM.YYYY",
             key="new_fixed_start",
         )
-        state["shipment_date"] = state["fixed_start_date"]
+        state["shipment_date"] = None
     else:
         state["shipment_date"] = st.date_input(
             "Срок отгрузки",

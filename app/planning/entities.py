@@ -10,7 +10,7 @@ class PlanningOrder:
 
     id: int
     quantity: float
-    shipment_date: date
+    shipment_date: date | None
     status: str
     priority: int = 0
     planning_mode: str = "От даты отгрузки"
@@ -84,7 +84,7 @@ class PlanningConflict:
     """Pure planning conflict returned when placement is impossible."""
 
     order_id: int
-    shipment_date: date
+    shipment_date: date | None
     work_center_id: int | None
     required_hours: float
     available_hours: float

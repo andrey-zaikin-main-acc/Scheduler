@@ -49,3 +49,32 @@ def test_planner_exception_rolls_back_all_draft_mutations():
         def recalculate_plan(self): raise RuntimeError('boom')
     result=DraftCommitService(s, Broken).commit(DraftBundle(orders=[valid_row(route.id)]),sections={'orders'})
     assert not result.ok and s.query(Order).count()==0
+
+
+def test_unchanged_empty_system_status_is_valid_and_child_sequence_survives():
+    s=make_session(); route=seed(s)
+    order=Order(priority=0, order_number='SYS', client_name='C', product_name='P', quantity=10,
+                shipment_date=date(2026,8,1), route_id=route.id, status='',
+                child_group_key='G', child_sequence_number=2, is_child_order=True,
+                is_linked_child_group=True)
+    s.add(order); s.commit()
+    row=valid_row(route.id) | {'id':order.id, 'order_number':'SYS', 'status':'', 'priority':0,
+                               'child_group_key':'G', 'child_sequence_number':2,
+                               'is_child_order':True, 'is_linked_child_group':True}
+    errors=DraftCommitService(s).validate(DraftBundle(orders=[row]), sections={'orders'})
+    assert errors == []
+    DraftCommitService(s)._apply_orders(DraftBundle(orders=[row]))
+    assert order.child_sequence_number == 2
+
+
+def test_priorities_are_applied_in_one_continuous_pass():
+    s=make_session(); route=seed(s)
+    rows=[]
+    for index in range(1,4):
+        row=valid_row(route.id) | {'id':-index, 'order_number':f'P-{index}', 'priority':4-index}
+        rows.append(row)
+    service=DraftCommitService(s)
+    service._apply_orders(DraftBundle(orders=rows))
+    assert [(o.order_number,o.priority) for o in s.query(Order).order_by(Order.priority)] == [
+        ('P-3',1), ('P-2',2), ('P-1',3)
+    ]

@@ -7,6 +7,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.constants import (
+    ORDER_STATUS_CANCELLED,
     PLANNING_MODE_START,
     ORDER_STATUS_NEW,
     ORDER_STATUS_PLANNED,
@@ -82,6 +83,13 @@ class RecalculationService:
         }
         self.plan_repository.clear_plan()
         self.conflicts_repository.clear_conflicts()
+        # Cancellation wins even when the order existed in the previous plan.
+        for cancelled in self.session.scalars(
+            select(Order).where(Order.status == ORDER_STATUS_CANCELLED)
+        ):
+            cancelled.priority = 0
+            cancelled.calculated_start_date = None
+            cancelled.calculated_shipment_date = None
 
         work_centers = [
             map_work_center_to_planning(work_center)
@@ -168,7 +176,13 @@ class RecalculationService:
 
         orders = self.session.scalars(
             select(Order)
-            .where(or_(Order.status.in_(PLANNABLE_ORDER_STATUSES), Order.id.in_(previously_planned_ids or set())))
+            .where(
+                or_(
+                    Order.status.in_(PLANNABLE_ORDER_STATUSES),
+                    Order.id.in_(previously_planned_ids or set()),
+                ),
+                Order.status != ORDER_STATUS_CANCELLED,
+            )
             .order_by(Order.priority, Order.id)
         ).all()
         orders_by_id.update((order.id, order) for order in orders)
@@ -216,7 +230,7 @@ class RecalculationService:
                         calculated_start_date=None,
                         conflict=PlanningConflict(
                             order_id=order.id,
-                            shipment_date=order.shipment_date or order.fixed_start_date,
+                            shipment_date=order.shipment_date,
                             work_center_id=None,
                             required_hours=0.0,
                             available_hours=0.0,
@@ -241,19 +255,23 @@ class RecalculationService:
             )
         if order.planning_mode == PLANNING_MODE_START:
             misses_start_deadline = (
-                result.calculated_start_date is None
+                order.fixed_start_date is None
+                or result.calculated_start_date is None
                 or result.calculated_start_date != order.fixed_start_date
             )
+            misses_finish_deadline = False
         else:
             misses_start_deadline = (
+                order.shipment_date is None
+                or
                 result.calculated_start_date is None
                 or result.calculated_start_date > order.shipment_date
             )
-        misses_finish_deadline = (
-            last_finish is None or last_finish.date() > order.shipment_date
-        )
-        if order.planning_mode == PLANNING_MODE_START:
-            misses_finish_deadline = False
+            misses_finish_deadline = (
+                order.shipment_date is None
+                or last_finish is None
+                or last_finish.date() > order.shipment_date
+            )
         if not misses_start_deadline and not misses_finish_deadline:
             return result
 

@@ -59,6 +59,9 @@ class DraftCommitService:
         if "orders" not in sections:
             return errors
         route_ids = set(self.session.scalars(select(Route.id)).all())
+        existing_statuses = {
+            order.id: order.status for order in self.session.scalars(select(Order)).all()
+        }
         numbers: dict[str, int] = {}
         for index, row in enumerate(draft.orders, 1):
             label = f"Заказ, строка {index} (ID {row.get('id', 'новый')})"
@@ -76,7 +79,12 @@ class DraftCommitService:
             numbers[number] = index
             if row.get("route_id") not in route_ids:
                 errors.append(f"{label}: поле route_id содержит неизвестный маршрут.")
-            if row.get("status") not in MANUAL_ORDER_STATUSES:
+            status = row.get("status")
+            unchanged_system_status = (
+                status in ("", None)
+                and existing_statuses.get(row.get("id")) in ("", None)
+            )
+            if status not in MANUAL_ORDER_STATUSES and not unchanged_system_status:
                 errors.append(f"{label}: поле status можно вручную задать только как Новый или Отменён.")
             mode = row.get("planning_mode", PLANNING_MODE_SHIPMENT)
             if mode == PLANNING_MODE_START and not isinstance(row.get("fixed_start_date"), date):
@@ -90,6 +98,7 @@ class DraftCommitService:
         for order_id in draft.pending_delete_ids:
             repository.delete_order(order_id)
         existing = {order.id: order for order in repository.list_orders()}
+        requested_priorities: dict[int, int] = {}
         for row in draft.orders:
             payload = {key: row.get(key) for key in (
                 "order_number", "client_name", "product_name", "quantity", "shipment_date",
@@ -98,11 +107,44 @@ class DraftCommitService:
             )}
             payload["shipment_date"] = payload["shipment_date"] if payload["planning_mode"] == PLANNING_MODE_SHIPMENT else None
             payload["fixed_start_date"] = payload["fixed_start_date"] if payload["planning_mode"] == PLANNING_MODE_START else None
-            if int(row.get("id", -1)) > 0 and int(row["id"]) in existing:
-                repository.update_order(int(row["id"]), **payload)
+            row_id = int(row.get("id") or -1)
+            requested_priority = int(row.get("priority") or 0)
+            # Priorities are persisted below in one pass; repeatedly calling
+            # move_order while the same list is changing produces unstable order.
+            payload["priority"] = None
+            if row_id > 0 and row_id in existing:
+                repository.update_order(row_id, **payload)
+                requested_priorities[row_id] = requested_priority
             else:
-                repository.create_order(**payload)
-        repository.normalize_priorities()
+                created = repository.create_order(**payload)
+                requested_priorities[created.id] = requested_priority
+        self._apply_priorities_once(repository, requested_priorities)
+
+    @staticmethod
+    def _apply_priorities_once(
+        repository: OrdersRepository, requested: dict[int, int]
+    ) -> None:
+        """Write the final continuous queue once, retaining linked child blocks."""
+        new_orders = [o for o in repository.list_orders() if o.status == ORDER_STATUS_NEW]
+        new_orders.sort(key=lambda o: (requested.get(o.id, o.priority or 10**9), o.id))
+        emitted: set[str] = set()
+        ordered: list[Order] = []
+        for order in new_orders:
+            key = order.child_group_key if order.is_linked_child_group else None
+            if key:
+                if key in emitted:
+                    continue
+                emitted.add(key)
+                block = [o for o in new_orders if o.is_linked_child_group and o.child_group_key == key]
+                ordered.extend(sorted(block, key=lambda o: (o.child_sequence_number or 0, o.id)))
+            else:
+                ordered.append(order)
+        for priority, order in enumerate(ordered, 1):
+            order.priority = priority
+        for order in repository.list_orders():
+            if order.status != ORDER_STATUS_NEW:
+                order.priority = 0
+        repository.session.flush()
 
 
 def success_flash(summary: RecalculationSummary) -> str:

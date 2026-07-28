@@ -6,7 +6,7 @@ pytest.importorskip("sqlalchemy")
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.constants import ORDER_STATUS_NEW, ORDER_STATUS_PLANNED
+from app.constants import ORDER_STATUS_NEW, ORDER_STATUS_PLANNED, PLANNING_MODE_START
 from app.db.database import Base
 from app.db.models import (
     Order,
@@ -333,3 +333,56 @@ def test_fallback_sort_ignores_status_and_shipment_date() -> None:
     )
 
     assert sort_prepared_orders([planned, new]) == (new, planned)
+
+
+def test_start_driven_order_without_shipment_date_is_planned_from_fixed_date(
+    session: Session,
+) -> None:
+    route = create_route_with_operation(session, hours_per_day=248, labor_hours_per_1000=8)
+    order = Order(
+        order_number="START-NO-DEADLINE", client_name="Клиент", product_name="Продукт",
+        quantity=1000, shipment_date=None, fixed_start_date=date(2026, 7, 10),
+        planning_mode=PLANNING_MODE_START, route_id=route.id, status=ORDER_STATUS_NEW,
+    )
+    session.add(order)
+    summary = RecalculationService(session, planning_start_date=date(2026, 7, 1)).recalculate_plan()
+
+    assert summary.planned_orders == 1
+    assert order.calculated_start_date == date(2026, 7, 10)
+    assert order.calculated_shipment_date == date(2026, 7, 10)
+    assert session.query(PlanningConflict).count() == 0
+
+
+def test_start_driven_conflict_can_store_null_shipment_date(session: Session) -> None:
+    route = create_route_with_operation(session, hours_per_day=1, labor_hours_per_1000=3)
+    route.is_active = False
+    order = Order(
+        order_number="START-CONFLICT", client_name="Клиент", product_name="Продукт",
+        quantity=1000, shipment_date=None, fixed_start_date=date(2026, 7, 10),
+        planning_mode=PLANNING_MODE_START, route_id=route.id, status=ORDER_STATUS_NEW,
+    )
+    session.add(order)
+    summary = RecalculationService(session, planning_start_date=date(2026, 7, 1)).recalculate_plan()
+
+    conflict = session.query(PlanningConflict).one()
+    assert summary.conflicts == 1
+    assert conflict.shipment_date is None
+    assert order.calculated_start_date is None
+    assert order.calculated_shipment_date is None
+
+
+def test_previously_planned_order_stays_cancelled(session: Session) -> None:
+    from app.constants import ORDER_STATUS_CANCELLED
+    route = create_route_with_operation(session, hours_per_day=248, labor_hours_per_1000=8)
+    order = Order(order_number="CANCEL-OLD", client_name="C", product_name="P", quantity=1000,
+                  shipment_date=date(2026, 7, 10), route_id=route.id, status=ORDER_STATUS_NEW)
+    session.add(order)
+    service = RecalculationService(session, planning_start_date=date(2026, 7, 1))
+    service.recalculate_plan()
+    order.status = ORDER_STATUS_CANCELLED
+    service.recalculate_plan()
+
+    assert order.priority == 0
+    assert order.calculated_start_date is None
+    assert order.calculated_shipment_date is None
+    assert session.query(PlannedOperation).filter_by(order_id=order.id).count() == 0

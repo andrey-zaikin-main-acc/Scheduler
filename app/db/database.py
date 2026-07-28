@@ -36,6 +36,7 @@ def create_all() -> None:
     _ensure_order_planning_columns()
     _ensure_order_priority_column()
     _ensure_draft_architecture_columns()
+    _ensure_nullable_conflict_shipment_date()
     _migrate_legacy_conflict_order_status()
 
 
@@ -177,6 +178,31 @@ def _ensure_nullable_order_dates_and_status() -> None:
                 f"PRAGMA foreign_keys = {'ON' if foreign_keys else 'OFF'}"
             )
             connection.commit()
+
+
+def _ensure_nullable_conflict_shipment_date() -> None:
+    """Allow conflicts for start-driven orders without inventing a deadline."""
+    inspector = inspect(engine)
+    if engine.dialect.name != "sqlite" or "planning_conflicts" not in inspector.get_table_names():
+        return
+    columns = {column["name"]: column for column in inspector.get_columns("planning_conflicts")}
+    if columns.get("shipment_date", {}).get("nullable", True):
+        return
+    with engine.begin() as connection:
+        sql = connection.execute(text(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='planning_conflicts'"
+        )).scalar_one()
+        replacement = _without_not_null(sql, {"shipment_date"}).replace(
+            "planning_conflicts", "planning_conflicts__nullable", 1
+        )
+        names = ", ".join(f'"{name}"' for name in columns)
+        connection.exec_driver_sql("DROP TABLE IF EXISTS planning_conflicts__nullable")
+        connection.exec_driver_sql(replacement)
+        connection.exec_driver_sql(
+            f"INSERT INTO planning_conflicts__nullable ({names}) SELECT {names} FROM planning_conflicts"
+        )
+        connection.exec_driver_sql("DROP TABLE planning_conflicts")
+        connection.exec_driver_sql("ALTER TABLE planning_conflicts__nullable RENAME TO planning_conflicts")
 
 
 def drop_all() -> None:
@@ -376,7 +402,7 @@ def _migrate_legacy_conflict_order_status() -> None:
                         available_hours, deficit_hours, blocking_order_ids, reason, created_at
                     )
                     SELECT
-                        orders.id, orders.shipment_date, NULL, 0, 0, 0, NULL,
+                        orders.id, CASE WHEN orders.planning_mode = 'От даты запуска' THEN NULL ELSE orders.shipment_date END, NULL, 0, 0, 0, NULL,
                         'Заказ перенесён из устаревшего статуса конфликта планирования.',
                         CURRENT_TIMESTAMP
                     FROM orders

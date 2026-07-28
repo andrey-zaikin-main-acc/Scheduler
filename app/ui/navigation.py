@@ -18,10 +18,6 @@ def render_navigation() -> None:
     st.title("Production Planner MVP")
     st.caption("Локальный прототип планирования производства с SQLite")
     render_bootstrap_controls()
-    if st.sidebar.button("Сохранить все изменения и пересчитать план", use_container_width=True):
-        from app.ui.pages.page_utils import commit_all_session_drafts
-        commit_all_session_drafts()
-
     page = st.sidebar.radio(
         "Раздел",
         [

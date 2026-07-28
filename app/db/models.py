@@ -183,7 +183,8 @@ class PlanningConflict(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), nullable=False, index=True)
-    shipment_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # Start-driven orders deliberately have no customer shipment deadline.
+    shipment_date: Mapped[Optional[date]] = mapped_column(Date)
     work_center_id: Mapped[Optional[int]] = mapped_column(ForeignKey("work_centers.id"), index=True)
     required_hours: Mapped[float] = mapped_column(Float, nullable=False)
     available_hours: Mapped[float] = mapped_column(Float, nullable=False)
