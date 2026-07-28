@@ -38,9 +38,7 @@ EDITOR_COLUMNS = [
     "Расчётная дата запуска",
     "Расчётная дата отгрузки",
     "Группа",
-    "Номер в группе",
-    "Дочерний заказ",
-    "Связанная группа",
+    "Связанные заказы",
     "Маршрут",
     "Статус",
     "Запланирован",
@@ -56,9 +54,10 @@ READ_ONLY_EDITOR_COLUMNS = [
     "Запланирован",
     "Конфликт планирования",
     "Группа",
-    "Связанная группа",
-    "Номер в группе",
-    "Дочерний заказ",
+    "Связанные заказы",
+    "Режим планирования",
+    "Заданная дата запуска",
+    "Заданная дата отгрузки",
 ]
 
 
@@ -91,7 +90,10 @@ def render_orders_page() -> None:
                 "Статус": st.column_config.SelectboxColumn("Статус", options=list(MANUAL_ORDER_STATUSES)),
                 "Маршрут": st.column_config.SelectboxColumn("Маршрут", options=list(route_by_name)),
             }) if rows else []
-        # Capture the current editor value on every rerun, including the button rerun.
+        edited = reconcile_priority_move(rows, edited)
+        edited = apply_scheduling_overrides(edited, render_scheduling_editors(edited))
+        # Capture the current editor value on every rerun. Navigation deliberately
+        # handles the recalculation button after this page has rendered.
         st.session_state.orders_draft_rows = edited
         selected = [row for row in edited if row.get("Выбран")]
         if st.button("Удалить выбранные заказы", disabled=not selected, use_container_width=True):
@@ -114,9 +116,9 @@ def _editor_row_to_draft(row: dict[str, Any], route_by_name: dict[str, Route]) -
         "shipment_date": row.get("Заданная дата отгрузки", row.get("Срок отгрузки")),
         "route_id": route.id if route else None, "status": row.get("Статус"),
         "child_group_key": row.get("Группа") or None,
-        "child_sequence_number": row.get("Номер в группе"),
-        "is_child_order": bool(row.get("Дочерний заказ", row.get("Группа"))),
-        "is_linked_child_group": bool(row.get("Связанная группа")),
+        "child_sequence_number": row.get("_child_sequence_number"),
+        "is_child_order": bool(row.get("_is_child_order", row.get("Группа"))),
+        "is_linked_child_group": bool(row.get("Связанные заказы")),
     }
 
 
@@ -259,8 +261,9 @@ def _save_new_order_form(session, repository: OrdersRepository, state: dict[str,
             "Заданная дата отгрузки": state.get("shipment_date") if state.get("planning_mode") == PLANNING_MODE_SHIPMENT else None,
             "Расчётная дата запуска": None, "Расчётная дата отгрузки": None,
             "Группа": str(state.get("order_number") or "") if len(numbers) > 1 else "",
-            "Номер в группе": sequence if len(numbers) > 1 else None,
-            "Связанная группа": bool(state.get("linked")), "Маршрут": state.get("route_name"),
+            "_child_sequence_number": sequence if len(numbers) > 1 else None,
+            "_is_child_order": len(numbers) > 1,
+            "Связанные заказы": bool(state.get("linked")), "Маршрут": state.get("route_name"),
             "Статус": ORDER_STATUS_NEW, "Запланирован": False, "Конфликт планирования": False,
         })
         next_id -= 1; priority += 1
@@ -299,6 +302,71 @@ def _order_editor_rows_signature(
     """Return a stable signature for persisted order data, excluding UI selection."""
     data_columns = [column for column in EDITOR_COLUMNS if column != "Выбран"]
     return tuple(tuple(row.get(column) for column in data_columns) for row in rows)
+
+
+def reconcile_priority_move(
+    previous: list[dict[str, Any]], edited: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Interpret one changed priority as a queue/block move and renumber it."""
+    old_by_id = {row.get("ID"): row for row in previous}
+    changed = [
+        row for row in edited
+        if row.get("Статус") == ORDER_STATUS_NEW
+        and _parse_priority(row.get("Приоритет")) is not None
+        and _parse_priority(row.get("Приоритет"))
+        != _parse_priority(old_by_id.get(row.get("ID"), {}).get("Приоритет"))
+    ]
+    queue = [row for row in edited if row.get("Статус") == ORDER_STATUS_NEW]
+    if len(changed) == 1:
+        moving = changed[0]
+        group = moving.get("Группа") if moving.get("Связанные заказы") else None
+        block = [r for r in queue if group and r.get("Связанные заказы") and r.get("Группа") == group] or [moving]
+        block.sort(key=lambda r: (r.get("_child_sequence_number") or 0, r.get("ID") or 0))
+        remaining = [r for r in queue if r not in block]
+        target = max(0, min(_parse_priority(moving.get("Приоритет")) - 1, len(remaining)))
+        queue = remaining[:target] + block + remaining[target:]
+    for priority, row in enumerate(queue, 1):
+        row["Приоритет"] = priority
+    for row in edited:
+        if row.get("Статус") != ORDER_STATUS_NEW:
+            row["Приоритет"] = None
+    return edited
+
+
+def render_scheduling_editors(rows: list[dict[str, Any]]) -> dict[int, tuple[str, date | None]]:
+    """Render truly row-specific mode/date controls (data_editor cannot disable cells per row)."""
+    if not rows:
+        return {}
+    st.caption("Режим и заданная дата редактируются отдельно для каждой строки.")
+    result = {}
+    for index, row in enumerate(rows):
+        label = row.get("Номер") or "новый заказ"
+        columns = st.columns(2)
+        mode = columns[0].selectbox(
+            f"Режим — {label}", list(PLANNING_MODES),
+            index=list(PLANNING_MODES).index(row.get("Режим планирования") or PLANNING_MODE_SHIPMENT),
+            key=f"order_mode_{row.get('ID')}_{index}",
+        )
+        current = row.get("Заданная дата запуска") if mode == PLANNING_MODE_START else row.get("Заданная дата отгрузки")
+        value = columns[1].date_input(
+            ("Заданная дата запуска" if mode == PLANNING_MODE_START else "Заданная дата отгрузки") + f" — {label}",
+            value=normalize_editor_date(current), key=f"order_date_{row.get('ID')}_{index}_{mode}",
+        )
+        result[index] = (mode, normalize_editor_date(value))
+    return result
+
+
+def apply_scheduling_overrides(rows, overrides):
+    """Apply row controls and clear the constraint incompatible with its mode."""
+    result = []
+    for index, row in enumerate(rows):
+        mode, value = overrides.get(index, (row.get("Режим планирования"), None))
+        item = dict(row)
+        item["Режим планирования"] = mode
+        item["Заданная дата запуска"] = value if mode == PLANNING_MODE_START else None
+        item["Заданная дата отгрузки"] = value if mode == PLANNING_MODE_SHIPMENT else None
+        result.append(item)
+    return result
 
 
 def order_status_options_for_row(status: str) -> list[str]:
@@ -361,7 +429,7 @@ def build_order_editor_rows(
                 "Расчётная дата запуска": None,
                 "Срок отгрузки": None,
                 "Группа": "",
-                "Связанная группа": False,
+                "Связанные заказы": False,
                 "Маршрут": None,
                 "Статус": ORDER_STATUS_NEW,
                 "Конфликт": False,
@@ -583,7 +651,7 @@ def _row_to_order_payload(
             else None
         ),
         "child_group_key": row.get("Группа") or None,
-        "is_linked_child_group": bool(row.get("Связанная группа")),
+        "is_linked_child_group": bool(row.get("Связанные заказы")),
         "route_id": route_by_name[str(row["Маршрут"])].id,
         "status": status,
     }

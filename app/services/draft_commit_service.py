@@ -87,10 +87,18 @@ class DraftCommitService:
             if status not in MANUAL_ORDER_STATUSES and not unchanged_system_status:
                 errors.append(f"{label}: поле status можно вручную задать только как Новый или Отменён.")
             mode = row.get("planning_mode", PLANNING_MODE_SHIPMENT)
-            if mode == PLANNING_MODE_START and not isinstance(row.get("fixed_start_date"), date):
-                errors.append(f"{label}: поле fixed_start_date обязательно.")
-            if mode == PLANNING_MODE_SHIPMENT and not isinstance(row.get("shipment_date"), date):
-                errors.append(f"{label}: поле shipment_date обязательно.")
+            if mode == PLANNING_MODE_START:
+                if not isinstance(row.get("fixed_start_date"), date):
+                    errors.append(f"{label}: поле fixed_start_date обязательно.")
+                if row.get("shipment_date") is not None:
+                    errors.append(f"{label}: поле shipment_date должно быть пустым для режима от даты запуска.")
+            elif mode == PLANNING_MODE_SHIPMENT:
+                if not isinstance(row.get("shipment_date"), date):
+                    errors.append(f"{label}: поле shipment_date обязательно.")
+                if row.get("fixed_start_date") is not None:
+                    errors.append(f"{label}: поле fixed_start_date должно быть пустым для режима от даты отгрузки.")
+            else:
+                errors.append(f"{label}: неизвестный режим планирования.")
         return errors
 
     def _apply_orders(self, draft: DraftBundle) -> None:
@@ -109,6 +117,9 @@ class DraftCommitService:
             payload["fixed_start_date"] = payload["fixed_start_date"] if payload["planning_mode"] == PLANNING_MODE_START else None
             row_id = int(row.get("id") or -1)
             requested_priority = int(row.get("priority") or 0)
+            if row.get("status") == ORDER_STATUS_NEW and requested_priority < 1:
+                # Returning a calculated/conflicted order to the queue appends it.
+                requested_priority = 10**9
             # Priorities are persisted below in one pass; repeatedly calling
             # move_order while the same list is changing produces unstable order.
             payload["priority"] = None
