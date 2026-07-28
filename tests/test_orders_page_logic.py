@@ -23,6 +23,7 @@ from app.ui.pages.orders_page import (
     apply_scheduling_overrides,
     reconcile_priority_move,
     normalize_editor_date,
+    normalize_scheduling_cells,
     validate_order_editor_row,
 )
 
@@ -678,6 +679,38 @@ def test_priority_edit_three_to_one_is_a_move() -> None:
     edited[2]["Приоритет"] = 1
     result = reconcile_priority_move(before, edited)
     assert [row["ID"] for row in sorted(result, key=lambda r: r["Приоритет"])] == [3, 1, 2]
+
+
+def test_render_preserves_priority_order_that_differs_from_id() -> None:
+    before = [
+        {"ID": 1, "Приоритет": 3, "Статус": ORDER_STATUS_NEW},
+        {"ID": 2, "Приоритет": 1, "Статус": ORDER_STATUS_NEW},
+        {"ID": 3, "Приоритет": 2, "Статус": ORDER_STATUS_NEW},
+    ]
+    result = reconcile_priority_move(before, [dict(row) for row in before])
+    assert {row["ID"]: row["Приоритет"] for row in result} == {1: 3, 2: 1, 3: 2}
+
+
+def test_return_to_new_appends_instead_of_restoring_old_priority() -> None:
+    before = _priority_rows()
+    before[2]["Статус"] = ""
+    before[2]["Приоритет"] = None
+    edited = [dict(row) for row in before]
+    edited[2]["Статус"] = ORDER_STATUS_NEW
+    result = reconcile_priority_move(before, edited)
+    assert {row["ID"]: row["Приоритет"] for row in result} == {1: 1, 2: 2, 3: 3}
+
+
+def test_mode_switch_clears_stale_date_without_copying_or_restoring_it() -> None:
+    row = {"Режим планирования": PLANNING_MODE_START,
+           "Заданная дата запуска": date(2026, 8, 1),
+           "Заданная дата отгрузки": date(2026, 8, 2)}
+    shipment = normalize_scheduling_cells([row], [{**row, "Режим планирования": PLANNING_MODE_SHIPMENT}])[0]
+    assert shipment["Заданная дата запуска"] is None
+    assert shipment["Заданная дата отгрузки"] == date(2026, 8, 2)
+    start = normalize_scheduling_cells([shipment], [{**shipment, "Режим планирования": PLANNING_MODE_START}])[0]
+    assert start["Заданная дата запуска"] is None
+    assert start["Заданная дата отгрузки"] is None
 
 
 def test_linked_children_move_as_one_ordered_block() -> None:

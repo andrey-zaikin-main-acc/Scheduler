@@ -348,7 +348,9 @@ def test_start_driven_order_without_shipment_date_is_planned_from_fixed_date(
     summary = RecalculationService(session, planning_start_date=date(2026, 7, 1)).recalculate_plan()
 
     assert summary.planned_orders == 1
-    assert order.calculated_start_date == date(2026, 7, 10)
+    # The requested start is shown in fixed_start_date; only the opposite,
+    # calculated shipment date is populated for start-driven planning.
+    assert order.calculated_start_date is None
     assert order.calculated_shipment_date == date(2026, 7, 10)
     assert session.query(PlanningConflict).count() == 0
 

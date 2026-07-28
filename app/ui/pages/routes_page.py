@@ -42,7 +42,7 @@ def render_routes_page() -> None:
         routes = list(routes_repository.list_routes_with_operations())
         selected_route_id = _normalize_selected_route(routes)
 
-        st.button("Сохранить изменения раздела и пересчитать план", use_container_width=True)
+        save_section = st.button("Сохранить изменения раздела и пересчитать план", use_container_width=True)
 
         add_col, delete_col = st.columns(2)
         with add_col:
@@ -55,15 +55,7 @@ def render_routes_page() -> None:
                 use_container_width=True,
                 disabled=selected_route_id is None,
             ):
-                if selected_route_id is not None:
-                    if routes_repository.delete_route(int(selected_route_id)):
-                        session.commit()
-                        recalculate_after_save(session)
-                        st.session_state[SELECTED_ROUTE_SESSION_KEY] = None
-                        st.session_state[DRAFT_ROUTE_SESSION_KEY] = False
-                        st.session_state[DRAFT_OPERATION_SESSION_KEY] = False
-                        st.rerun()
-                    st.error("Маршрут используется в заказах и не может быть удалён.")
+                st.warning("Маршруты не удаляются физически. Снимите флаг «Активен» и сохраните раздел.")
 
         route_rows_data = build_route_editor_rows(
             routes,
@@ -90,7 +82,10 @@ def render_routes_page() -> None:
                 "Операций": st.column_config.NumberColumn("Операций", disabled=True),
             },
         )
-        _process_route_changes(session, routes_repository, routes, edited_routes)
+        st.session_state["routes_draft_rows"] = edited_routes
+        if save_section:
+            from app.ui.pages.page_utils import commit_all_session_drafts
+            commit_all_session_drafts()
 
         selected_route_id = st.session_state.get(SELECTED_ROUTE_SESSION_KEY)
         selected_route = next(
@@ -121,16 +116,9 @@ def _render_operations_table(
             use_container_width=True,
             disabled=selected_operation_id is None,
         ):
-            if selected_operation_id is not None:
-                if repository.delete_operation_safe(int(selected_operation_id)):
-                    session.commit()
-                    recalculate_after_save(session)
-                    st.session_state[SELECTED_OPERATION_SESSION_KEY] = None
-                    st.session_state[DRAFT_OPERATION_SESSION_KEY] = False
-                    st.rerun()
-                st.error("Операция используется в плане и не может быть удалена.")
+            st.warning("Операции не удаляются физически. Снимите флаг «Активна» и сохраните раздел.")
 
-    work_center_by_name = {item.name: item for item in work_centers}
+    work_center_by_name = {item.name: item for item in work_centers if item.is_active}
     rows = build_operation_editor_rows(
         route.operations,
         selected_id=selected_operation_id,
@@ -164,9 +152,9 @@ def _render_operations_table(
             ),
         },
     )
-    _process_operation_changes(
-        session, repository, route, edited_rows, work_center_by_name
-    )
+    for row in edited_rows:
+        row["_route_id"] = route.id
+    st.session_state["route_operations_draft_rows"] = edited_rows
 
 
 def build_route_editor_rows(

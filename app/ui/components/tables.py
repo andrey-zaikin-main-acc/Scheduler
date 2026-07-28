@@ -36,6 +36,7 @@ def order_rows(orders: list[Order]) -> list[dict[str, object]]:
             # arbitrary edit of another cell in the registry.
             "_child_sequence_number": order.child_sequence_number,
             "_is_child_order": bool(order.is_child_order),
+            "_route_id": order.route_id,
             "Маршрут": order.route.name if order.route else None,
             "Статус": order.status or "",
             "Запланирован": bool(order.planned_operations),
