@@ -1,5 +1,6 @@
 """Database engine and session helpers for the production planner MVP."""
 
+import re
 from collections.abc import Iterator
 
 from sqlalchemy import create_engine, inspect, text
@@ -40,6 +41,7 @@ def create_all() -> None:
 
 def _ensure_draft_architecture_columns() -> None:
     """Idempotently upgrade databases created before session drafts existed."""
+    _ensure_nullable_order_dates_and_status()
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
     with engine.begin() as connection:
@@ -72,6 +74,109 @@ def _ensure_draft_architecture_columns() -> None:
                 WHERE status = 'Запланирован'
                    OR EXISTS (SELECT 1 FROM planning_conflicts c WHERE c.order_id = orders.id)
             """))
+
+
+def _without_not_null(create_sql: str, column_names: set[str]) -> str:
+    """Remove NOT NULL from selected top-level columns in SQLite CREATE SQL."""
+    opening = create_sql.index("(")
+    closing = create_sql.rindex(")")
+    body = create_sql[opening + 1 : closing]
+    parts: list[str] = []
+    start = 0
+    depth = 0
+    quote: str | None = None
+    for position, character in enumerate(body):
+        if quote:
+            if character == quote:
+                quote = None
+        elif character in "\"'`[":
+            quote = "]" if character == "[" else character
+        elif character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+        elif character == "," and depth == 0:
+            parts.append(body[start:position])
+            start = position + 1
+    parts.append(body[start:])
+
+    identifier = re.compile(r'^\s*(?:"([^"]+)"|`([^`]+)`|\[([^]]+)\]|([^\s]+))')
+    for index, definition in enumerate(parts):
+        match = identifier.match(definition)
+        name = next((value for value in match.groups() if value), None) if match else None
+        if name and name.lower() in column_names:
+            parts[index] = re.sub(r"\s+NOT\s+NULL\b", "", definition, flags=re.IGNORECASE)
+    return create_sql[: opening + 1] + ",".join(parts) + create_sql[closing:]
+
+
+def _ensure_nullable_order_dates_and_status() -> None:
+    """Transactionally align legacy SQLite ``orders`` nullability with the ORM.
+
+    SQLite cannot drop a NOT NULL constraint in place.  Rebuilding only this
+    table preserves the database and every order id; child tables are left in
+    place while foreign-key enforcement is temporarily disabled.
+    """
+    inspector = inspect(engine)
+    if engine.dialect.name != "sqlite" or "orders" not in inspector.get_table_names():
+        return
+    columns = {column["name"]: column for column in inspector.get_columns("orders")}
+    targets = {
+        name for name in ("shipment_date", "status")
+        if name in columns and not columns[name]["nullable"]
+    }
+    if not targets:
+        return
+
+    temporary_table = "orders__nullable_migration"
+    with engine.connect() as connection:
+        foreign_keys = bool(connection.exec_driver_sql("PRAGMA foreign_keys").scalar())
+        connection.commit()
+        connection.exec_driver_sql("PRAGMA foreign_keys = OFF")
+        connection.commit()
+        try:
+            with connection.begin():
+                connection.exec_driver_sql(f'DROP TABLE IF EXISTS "{temporary_table}"')
+                create_sql = connection.execute(text(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'orders'"
+                )).scalar_one()
+                create_sql = _without_not_null(create_sql, targets)
+                create_sql = re.sub(
+                    r"^(\s*CREATE\s+TABLE\s+)(?:\"orders\"|`orders`|\[orders\]|orders)",
+                    rf'\1"{temporary_table}"',
+                    create_sql,
+                    count=1,
+                    flags=re.IGNORECASE,
+                )
+                indexes = connection.execute(text("""
+                    SELECT sql FROM sqlite_master
+                    WHERE type = 'index' AND tbl_name = 'orders' AND sql IS NOT NULL
+                    ORDER BY name
+                """)).scalars().all()
+                column_list = ", ".join(f'"{name}"' for name in columns)
+                connection.exec_driver_sql(create_sql)
+                connection.exec_driver_sql(
+                    f'INSERT INTO "{temporary_table}" ({column_list}) '
+                    f'SELECT {column_list} FROM "orders"'
+                )
+                connection.exec_driver_sql('DROP TABLE "orders"')
+                connection.exec_driver_sql(
+                    f'ALTER TABLE "{temporary_table}" RENAME TO "orders"'
+                )
+                for index_sql in indexes:
+                    connection.exec_driver_sql(index_sql)
+                violations = connection.exec_driver_sql(
+                    "PRAGMA foreign_key_check"
+                ).all()
+                if violations:
+                    raise RuntimeError(
+                        "orders migration failed foreign-key validation: "
+                        f"{violations}"
+                    )
+        finally:
+            connection.exec_driver_sql(
+                f"PRAGMA foreign_keys = {'ON' if foreign_keys else 'OFF'}"
+            )
+            connection.commit()
 
 
 def drop_all() -> None:
