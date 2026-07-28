@@ -629,10 +629,26 @@ def test_zero_quantity_stops_before_slot_service(monkeypatch) -> None:
     assert "Тираж должен быть больше 0" in fake_st.error_messages
 
 
-def test_save_button_uses_global_atomic_label() -> None:
-    source = __import__("pathlib").Path("app/ui/pages/orders_page.py").read_text()
-    assert '"Сохранить все изменения и пересчитать план"' in source
-    assert '"Удалить выбранные заказы"' in source
+def test_only_global_recalculation_button_remains() -> None:
+    pathlib = __import__("pathlib")
+    sources = "\n".join(
+        pathlib.Path(path).read_text()
+        for path in ("app/ui/navigation.py", "app/ui/pages/orders_page.py", "app/ui/pages/common.py")
+    )
+    assert "Сохранить все изменения и пересчитать план" not in sources
+    assert sources.count('st.button("Пересчитать план")') == 1
+
+
+def test_calculated_dates_are_read_only_and_child_sequence_is_in_rows() -> None:
+    assert "Расчётная дата запуска" in READ_ONLY_EDITOR_COLUMNS
+    assert "Расчётная дата отгрузки" in READ_ONLY_EDITOR_COLUMNS
+    order = _order(); order.child_sequence_number = 7; order.is_child_order = True
+    row = build_order_editor_rows([order], selected_order_id=None, include_draft=False)[0]
+    assert row["Номер в группе"] == 7
+    assert row["Дочерний заказ"] is True
+    assert "Удалить выбранные заказы" in __import__("pathlib").Path(
+        "app/ui/pages/orders_page.py"
+    ).read_text()
 
 
 @pytest.mark.parametrize(

@@ -30,6 +30,8 @@ def order_rows(orders: list[Order]) -> list[dict[str, object]]:
             "Заданная дата отгрузки": order.shipment_date,
             "Расчётная дата отгрузки": order.calculated_shipment_date,
             "Группа": order.child_group_key or "",
+            "Номер в группе": order.child_sequence_number,
+            "Дочерний заказ": bool(order.is_child_order),
             "Связанная группа": bool(order.is_linked_child_group),
             "Маршрут": order.route.name if order.route else None,
             "Статус": order.status or "",

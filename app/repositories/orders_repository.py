@@ -152,6 +152,7 @@ class OrdersRepository:
             self.move_order(order.id, priority)
         if planning_inputs_changed:
             order.calculated_start_date = None
+            order.calculated_shipment_date = None
         if status == ORDER_STATUS_CANCELLED:
             order.calculated_start_date = None
             order.calculated_shipment_date = None
@@ -165,6 +166,10 @@ class OrdersRepository:
         status: str, *, current_status: str | None = None
     ) -> None:
         if status in MANUAL_ORDER_STATUSES:
+            return
+        # Empty is a system-owned result state.  It may be submitted unchanged
+        # by the editor, but cannot be assigned to another order manually.
+        if status == "" and current_status in ("", None):
             return
         if status == current_status and status in CALCULATED_ORDER_STATUSES:
             return
