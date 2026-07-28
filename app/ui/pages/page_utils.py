@@ -11,13 +11,38 @@ from app.services.recalculation_service import RecalculationService
 
 def recalculate_after_save(session: Session) -> None:
     """Recalculate the production plan after a persisted user change."""
-    summary = RecalculationService(session).recalculate_plan()
-    st.success(
-        "Изменения сохранены, план пересчитан: "
-        f"заказов запланировано — {summary.planned_orders}, "
-        f"конфликтов — {summary.conflicts}, "
-        f"операций — {summary.planned_operations}."
-    )
+    try:
+        summary = RecalculationService(session).recalculate_plan()
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    st.success(f"Изменения сохранены. План пересчитан: запланировано — {summary.planned_orders}, конфликтов — {summary.conflicts}.")
+
+
+def commit_all_session_drafts() -> None:
+    """Sidebar adapter for the same atomic action as the registry button."""
+    from app.db.database import SessionLocal
+    from app.db.models import Route
+    from app.services.draft_commit_service import DraftBundle, DraftCommitService, success_flash
+    from app.ui.pages.orders_page import _editor_row_to_draft
+    from sqlalchemy import select
+    with SessionLocal() as session:
+        routes = list(session.scalars(select(Route)).all())
+        route_by_name = {route.name: route for route in routes}
+        rows = st.session_state.get("orders_draft_rows", [])
+        bundle = DraftBundle(
+            orders=[_editor_row_to_draft(row, route_by_name) for row in rows],
+            pending_delete_ids=set(st.session_state.get("orders_pending_delete_ids", set())),
+        )
+        result = DraftCommitService(session).commit(bundle)
+        if result.ok:
+            st.session_state.pop("orders_draft_rows", None)
+            st.session_state["orders_pending_delete_ids"] = set()
+            st.session_state["draft_flash"] = success_flash(result.summary)
+            st.rerun()
+        for error in result.errors:
+            st.sidebar.error(error)
 
 
 def normalize_date_range(value: object, default_start: date, default_end: date) -> tuple[date, date]:

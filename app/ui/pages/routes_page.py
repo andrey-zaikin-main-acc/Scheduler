@@ -19,6 +19,7 @@ OPERATION_COLUMNS = [
     "Участок",
     "Трудоёмкость на 1000",
     "Мин. передаточная партия",
+    "Активна",
 ]
 DRAFT_ROUTE_SESSION_KEY = "routes_page_has_draft_route"
 SELECTED_ROUTE_SESSION_KEY = "routes_page_selected_route_id"
@@ -32,7 +33,7 @@ def render_routes_page() -> None:
     """Render routes and route operations with inline editing controls."""
     st.header("Справочник маршрутов")
     st.caption(
-        "Редактируйте маршруты и операции прямо в таблицах. После изменений план автоматически пересчитывается."
+        "Изменения хранятся в черновике до явного сохранения раздела."
     )
 
     with SessionLocal() as session:
@@ -40,6 +41,8 @@ def render_routes_page() -> None:
         work_centers = list(WorkCentersRepository(session).list_work_centers())
         routes = list(routes_repository.list_routes_with_operations())
         selected_route_id = _normalize_selected_route(routes)
+
+        st.button("Сохранить изменения раздела и пересчитать план", use_container_width=True)
 
         add_col, delete_col = st.columns(2)
         with add_col:
@@ -203,6 +206,7 @@ def build_operation_editor_rows(
                 "Участок": None,
                 "Трудоёмкость на 1000": 0.0,
                 "Мин. передаточная партия": 0.0,
+                "Активна": True,
             }
         )
     return rows
@@ -383,6 +387,7 @@ def _operation_row_to_payload(
         "work_center_id": work_center_by_name[str(row["Участок"])].id,
         "labor_hours_per_1000": float(row["Трудоёмкость на 1000"]),
         "min_transfer_quantity_to_next": transfer if transfer > 0 else None,
+        "is_active": bool(row.get("Активна", True)),
     }
 
 
@@ -407,6 +412,7 @@ def _operation_row_changed(row: dict[str, Any], operation: RouteOperation) -> bo
             != float(operation.labor_hours_per_1000),
             (transfer if transfer > 0 else None)
             != operation.min_transfer_quantity_to_next,
+            bool(row.get("Активна", True)) != operation.is_active,
         ]
     )
 

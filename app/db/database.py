@@ -34,7 +34,44 @@ def create_all() -> None:
     _ensure_planned_operation_day_intraday_columns()
     _ensure_order_planning_columns()
     _ensure_order_priority_column()
+    _ensure_draft_architecture_columns()
     _migrate_legacy_conflict_order_status()
+
+
+def _ensure_draft_architecture_columns() -> None:
+    """Idempotently upgrade databases created before session drafts existed."""
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    with engine.begin() as connection:
+        if "route_operations" in tables:
+            columns = {c["name"] for c in inspector.get_columns("route_operations")}
+            if "is_active" not in columns:
+                connection.execute(text("ALTER TABLE route_operations ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1"))
+        if "plan_changes" in tables:
+            columns = {c["name"] for c in inspector.get_columns("plan_changes")}
+            if "operation_sequence_number" not in columns:
+                connection.execute(text("ALTER TABLE plan_changes ADD COLUMN operation_sequence_number INTEGER"))
+        if "orders" in tables:
+            columns = {c["name"] for c in inspector.get_columns("orders")}
+            if "calculated_shipment_date" not in columns:
+                connection.execute(text("ALTER TABLE orders ADD COLUMN calculated_shipment_date DATE"))
+            # Recover the result for start-driven legacy orders from the real plan.
+            connection.execute(text("""
+                UPDATE orders SET calculated_shipment_date = (
+                    SELECT MAX(planned_end_date) FROM planned_operations
+                    WHERE planned_operations.order_id = orders.id
+                ) WHERE planning_mode = 'От даты запуска'
+                  AND calculated_shipment_date IS NULL
+            """))
+            connection.execute(text("""
+                UPDATE orders SET shipment_date = NULL
+                WHERE planning_mode = 'От даты запуска'
+            """))
+            connection.execute(text("""
+                UPDATE orders SET status = ''
+                WHERE status = 'Запланирован'
+                   OR EXISTS (SELECT 1 FROM planning_conflicts c WHERE c.order_id = orders.id)
+            """))
 
 
 def drop_all() -> None:
@@ -251,5 +288,5 @@ def _migrate_legacy_conflict_order_status() -> None:
                 SET status = :new_status, calculated_start_date = NULL
                 WHERE status = 'Конфликт планирования'
                 """),
-            {"new_status": ORDER_STATUS_NEW},
+            {"new_status": ""},
         )

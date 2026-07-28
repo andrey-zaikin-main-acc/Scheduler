@@ -112,6 +112,39 @@ class FreeSlotsService:
             )
         return [row.to_dict() for row in rows]
 
+    def find_start_slots(self, *, route_id: int, quantity: float, start_date: date, end_date: date) -> list[dict[str, date]]:
+        """Return non-persisting candidate start/result-shipment pairs.
+
+        Capacity is checked against the saved plan only.  Completion is allowed
+        beyond ``end_date``; only the candidate start is constrained.
+        """
+        route = self.session.scalar(select(Route).where(Route.id == route_id).options(selectinload(Route.operations).selectinload(RouteOperation.work_center)))
+        if not route or not route.is_active or not route.operations or any(not op.is_active or not op.work_center or not op.work_center.is_active for op in route.operations):
+            return []
+        results = []
+        for candidate in _date_range(start_date, end_date):
+            finish = candidate
+            possible = True
+            for operation in route.operations:
+                hours = quantity * operation.labor_hours_per_1000 / 1000
+                while hours > 1e-9:
+                    occupied = self._occupied_hours_by_work_center_and_date(start_date=finish, end_date=finish).get((operation.work_center_id, finish), 0)
+                    free = max(0.0, daily_capacity_from_monthly(operation.work_center.available_hours_per_day, finish) - occupied)
+                    hours -= free
+                    if hours > 1e-9:
+                        finish += timedelta(days=1)
+                    if (finish - candidate).days > 3660:
+                        possible = False; break
+                if not possible: break
+            if possible:
+                results.append({"Заданная дата запуска": candidate, "Расчётная дата отгрузки": finish})
+        return results
+
+    def find_shipment_slots(self, *, route_id: int, quantity: float, start_date: date, end_date: date) -> list[dict[str, date]]:
+        """Return shipment candidates paired with an approximate calculated start."""
+        starts = self.find_start_slots(route_id=route_id, quantity=quantity, start_date=start_date, end_date=end_date)
+        return [{"Расчётная дата запуска": row["Заданная дата запуска"], "Заданная дата отгрузки": row["Расчётная дата отгрузки"]} for row in starts if row["Расчётная дата отгрузки"] <= end_date]
+
     def _free_slot_rows(self, *, start_date: date, end_date: date) -> list[FreeSlotRow]:
         work_centers = self.session.scalars(
             select(WorkCenter)

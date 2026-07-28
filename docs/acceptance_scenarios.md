@@ -72,3 +72,11 @@ free_hours × 1000 / labor_hours_per_1000
 ## 13. Диаграмма Ганта по участкам
 
 Проверяется, что строки диаграммы соответствуют участкам, а внутри отображаются заказы/операции, занимающие мощность.
+
+## Atomic draft scenarios
+
+1. Add a partially filled order: it appears with a negative temporary ID and SQLite is unchanged.
+2. Select any number of persisted and temporary rows and delete: temporary rows disappear, persisted IDs enter `pending_delete_ids`, SQLite is unchanged.
+3. Save an invalid draft: every row/field error is reported, no recalculation or write occurs, and the screen state remains.
+4. Save a valid draft: additions, changes, deletions, priority normalization and one recalculation receive one commit; an exception rolls all of them back.
+5. A section save validates only that directory and calculates strictly from committed data; drafts on other pages remain pending.

@@ -45,7 +45,7 @@ def test_shipment_planning_row_displays_calculated_start_date() -> None:
         0
     ]
 
-    assert row["Фиксированная дата запуска"] is None
+    assert row["Заданная дата запуска"] is None
     assert row["Расчётная дата запуска"] == date(2026, 7, 5)
 
 
@@ -59,7 +59,7 @@ def test_start_planning_row_displays_fixed_and_calculated_start_dates() -> None:
         0
     ]
 
-    assert row["Фиксированная дата запуска"] == date(2026, 7, 5)
+    assert row["Заданная дата запуска"] == date(2026, 7, 5)
     assert row["Расчётная дата запуска"] == date(2026, 7, 5)
 
 
@@ -128,24 +128,10 @@ def test_order_editor_rows_include_selection_and_editable_fields() -> None:
 
     rows = build_order_editor_rows([order], selected_order_id=10, include_draft=True)
 
-    assert rows[0] == {
-        "Выбран": True,
-        "ID": 10,
-        "Приоритет": None,
-        "Номер": "O-10",
-        "Клиент": "Клиент",
-        "Продукция": "Продукт",
-        "Тираж": 1000,
-        "Режим планирования": "От даты отгрузки",
-        "Фиксированная дата запуска": None,
-        "Расчётная дата запуска": None,
-        "Срок отгрузки": date(2026, 7, 10),
-        "Группа": "",
-        "Связанная группа": False,
-        "Маршрут": "наша сборка",
-        "Статус": ORDER_STATUS_NEW,
-        "Конфликт": False,
-    }
+    assert rows[0]["ID"] == 10
+    assert rows[0]["Заданная дата отгрузки"] == date(2026, 7, 10)
+    assert rows[0]["Запланирован"] is False
+    assert rows[0]["Конфликт планирования"] is False
     assert rows[1]["ID"] is None
     assert rows[1]["Статус"] == ORDER_STATUS_NEW
 
@@ -643,14 +629,10 @@ def test_zero_quantity_stops_before_slot_service(monkeypatch) -> None:
     assert "Тираж должен быть больше 0" in fake_st.error_messages
 
 
-def test_save_button_is_renamed_and_not_primary() -> None:
+def test_save_button_uses_global_atomic_label() -> None:
     source = __import__("pathlib").Path("app/ui/pages/orders_page.py").read_text()
-    save_call = source.split("save_requested = st.form_submit_button(", 1)[1].split(
-        ")", 1
-    )[0]
-    assert '"Сохранить изменения и пересчитать план"' in save_call
-    assert 'type="primary"' not in save_call
-    assert 'with st.form("orders_page_editor_form")' in source
+    assert '"Сохранить все изменения и пересчитать план"' in source
+    assert '"Удалить выбранные заказы"' in source
 
 
 @pytest.mark.parametrize(

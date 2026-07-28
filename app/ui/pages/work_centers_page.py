@@ -16,7 +16,6 @@ EDITOR_COLUMNS = [
     "ID",
     "Название",
     "Доступное время в месяц",
-    "Время начала рабочего дня",
     "Активен",
     "Нельзя прерывать заказ при планировании",
 ]
@@ -26,74 +25,43 @@ EDITOR_KEY = "work_centers_page_editor"
 
 
 def render_work_centers_page() -> None:
-    """Render work centers with inline editing controls."""
+    """Edit work centers in session state and save only on explicit request."""
     st.header("Справочник участков")
-    st.caption(
-        "Редактируйте участки прямо в таблице. После изменения план автоматически пересчитывается."
-    )
-
     with SessionLocal() as session:
         repository = WorkCentersRepository(session)
-        work_centers = list(repository.list_work_centers())
-        selected_id = st.session_state.get(SELECTED_ROW_SESSION_KEY)
-        if selected_id not in {item.id for item in work_centers}:
-            selected_id = None
-            st.session_state[SELECTED_ROW_SESSION_KEY] = None
-
-        add_col, delete_col = st.columns(2)
-        with add_col:
-            if st.button("Добавить участок", use_container_width=True):
-                st.session_state[DRAFT_ROW_SESSION_KEY] = True
-                st.rerun()
-        with delete_col:
-            if st.button(
-                "Удалить участок",
-                use_container_width=True,
-                disabled=selected_id is None,
-            ):
-                if selected_id is not None:
-                    deleted = repository.delete_work_center(int(selected_id))
-                    if deleted:
-                        session.commit()
-                        recalculate_after_save(session)
-                        st.session_state[SELECTED_ROW_SESSION_KEY] = None
-                        st.session_state[DRAFT_ROW_SESSION_KEY] = False
-                        st.rerun()
-                    st.error(
-                        "Участок используется в маршрутах или плане и не может быть удалён."
-                    )
-
-        include_draft = bool(st.session_state.get(DRAFT_ROW_SESSION_KEY))
-        rows = build_work_center_editor_rows(
-            work_centers, selected_id=selected_id, include_draft=include_draft
-        )
-        if not rows:
-            st.info("Участки пока не заведены. Нажмите «Добавить участок».")
-            return
-
-        edited_rows = st.data_editor(
-            rows,
-            key=EDITOR_KEY,
-            use_container_width=True,
-            hide_index=True,
-            disabled=["ID"],
-            column_order=EDITOR_COLUMNS,
-            num_rows="fixed",
-            column_config={
-                "Выбран": st.column_config.CheckboxColumn(
-                    "Выбран", help="Отметьте один участок для удаления."
-                ),
-                "ID": st.column_config.NumberColumn("ID", disabled=True),
-                "Доступное время в месяц": st.column_config.NumberColumn(
-                    "Доступное время в месяц", min_value=0.01, step=0.5
-                ),
-                "Активен": st.column_config.CheckboxColumn("Активен"),
-                "Нельзя прерывать заказ при планировании": st.column_config.CheckboxColumn(
-                    "Нельзя прерывать заказ при планировании"
-                ),
-            },
-        )
-        _process_editor_changes(session, repository, work_centers, edited_rows)
+        items = list(repository.list_work_centers())
+        if "work_centers_draft_rows" not in st.session_state:
+            st.session_state.work_centers_draft_rows = build_work_center_editor_rows(items, selected_id=None, include_draft=False)
+        if st.button("Добавить участок"):
+            st.session_state.work_centers_draft_rows.append({"Выбран": False, "ID": None, "Название": "", "Доступное время в месяц": 0.0, "Активен": True, "Нельзя прерывать заказ при планировании": False})
+            st.rerun()
+        edited = st.data_editor(st.session_state.work_centers_draft_rows, key=EDITOR_KEY, hide_index=True,
+            disabled=["ID"], column_order=EDITOR_COLUMNS, num_rows="fixed")
+        st.session_state.work_centers_draft_rows = edited
+        if st.button("Сохранить изменения раздела и пересчитать план", use_container_width=True):
+            errors=[]; names={}
+            for i,row in enumerate(edited,1):
+                name=str(row.get("Название") or "").strip(); hours=_parse_float(row.get("Доступное время в месяц"))
+                if not name: errors.append(f"Строка {i}, Название: обязательное поле")
+                if hours is None or hours <= 0: errors.append(f"Строка {i}, Доступное время в месяц: должно быть больше 0")
+                if name in names: errors.append(f"Строка {i}, Название: дубликат строки {names[name]}")
+                names[name]=i
+            if errors:
+                for error in errors: st.error(error)
+            else:
+                try:
+                    existing={item.id:item for item in items}
+                    for row in edited:
+                        payload={"name":str(row["Название"]).strip(), "available_hours_per_day":float(row["Доступное время в месяц"]), "workday_start_time":time(9), "is_active":bool(row["Активен"]), "prevent_order_interruption":bool(row["Нельзя прерывать заказ при планировании"])}
+                        if row.get("ID") in existing: repository.update_work_center(int(row["ID"]), **payload)
+                        else: repository.create_work_center(**payload)
+                    summary=__import__("app.services.recalculation_service",fromlist=["RecalculationService"]).RecalculationService(session).recalculate_plan()
+                    session.commit()
+                    st.session_state.pop("work_centers_draft_rows",None)
+                    st.session_state.draft_flash=__import__("app.services.draft_commit_service",fromlist=["success_flash"]).success_flash(summary)
+                    st.rerun()
+                except Exception as exc:
+                    session.rollback(); st.error(f"Техническая ошибка: {exc}")
 
 
 def build_work_center_editor_rows(
@@ -110,7 +78,6 @@ def build_work_center_editor_rows(
                 "ID": None,
                 "Название": "",
                 "Доступное время в месяц": 0.0,
-                "Время начала рабочего дня": "09:00",
                 "Активен": True,
                 "Нельзя прерывать заказ при планировании": False,
             }

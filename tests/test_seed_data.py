@@ -188,7 +188,7 @@ def test_seed_planned_orders_do_not_start_or_finish_after_shipment_date() -> Non
         ).recalculate_plan()
 
         planned_orders = session.scalars(
-            select(Order).where(Order.status == ORDER_STATUS_PLANNED)
+            select(Order).join(PlannedOperation).where(Order.status == "")
         ).all()
         assert planned_orders
         for order in planned_orders:
@@ -240,7 +240,7 @@ def test_excel_105_plans_with_same_rules_as_capacity_precheck() -> None:
         ).recalculate_plan()
         session.refresh(excel_105)
 
-        assert excel_105.status == ORDER_STATUS_PLANNED
+        assert excel_105.status == ""
         assert excel_105.calculated_start_date is not None
 
         last_finish = session.scalar(

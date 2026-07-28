@@ -18,21 +18,23 @@ def order_rows(orders: list[Order]) -> list[dict[str, object]]:
     return [
         {
             "ID": order.id,
-            "Приоритет": order.priority,
+            "Приоритет": order.priority or None,
             "Номер": order.order_number,
             "Клиент": order.client_name,
             "Продукция": order.product_name,
             "Тираж": order.quantity,
             "Режим планирования": order.planning_mode or "От даты отгрузки",
             # Keep the editable scheduling constraint separate from planner output.
-            "Фиксированная дата запуска": order.fixed_start_date,
+            "Заданная дата запуска": order.fixed_start_date,
             "Расчётная дата запуска": order.calculated_start_date,
-            "Срок отгрузки": order.shipment_date,
+            "Заданная дата отгрузки": order.shipment_date,
+            "Расчётная дата отгрузки": order.calculated_shipment_date,
             "Группа": order.child_group_key or "",
             "Связанная группа": bool(order.is_linked_child_group),
             "Маршрут": order.route.name if order.route else None,
-            "Статус": order.status,
-            "Конфликт": bool(order.conflicts),
+            "Статус": order.status or "",
+            "Запланирован": bool(order.planned_operations),
+            "Конфликт планирования": bool(order.conflicts),
         }
         for order in orders
     ]
@@ -45,7 +47,6 @@ def work_center_rows(work_centers: list[WorkCenter]) -> list[dict[str, object]]:
             "ID": item.id,
             "Название": item.name,
             "Доступное время в месяц": item.available_hours_per_day,
-            "Время начала рабочего дня": item.workday_start_time.strftime("%H:%M"),
             "Активен": item.is_active,
             "Нельзя прерывать заказ при планировании": item.prevent_order_interruption,
         }
@@ -76,6 +77,7 @@ def route_operation_rows(operations: list[RouteOperation]) -> list[dict[str, obj
             "Участок": operation.work_center.name if operation.work_center else None,
             "Трудоёмкость на 1000": operation.labor_hours_per_1000,
             "Мин. передаточная партия": operation.min_transfer_quantity_to_next or 0.0,
+            "Активна": operation.is_active,
         }
         for operation in operations
     ]
@@ -164,7 +166,7 @@ def plan_change_rows(changes: list[PlanChange]) -> list[dict[str, object]]:
         {
             "Тип": change.change_type,
             "Заказ": change.order_id,
-            "Операция": change.planned_operation_id,
+            "Операция": change.operation_sequence_number,
             "Старый старт": change.old_start_date,
             "Старое окончание": change.old_end_date,
             "Новый старт": change.new_start_date,
