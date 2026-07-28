@@ -31,7 +31,7 @@ class OrdersRepository:
     def list_orders(self) -> Sequence[Order]:
         """Return orders in their user-defined planning order."""
         return self.session.scalars(
-            select(Order).order_by(Order.priority, Order.id)
+            select(Order).order_by(Order.priority == 0, Order.priority, Order.id)
         ).all()
 
     def get_order(self, order_id: int) -> Order | None:
@@ -51,7 +51,7 @@ class OrdersRepository:
         client_name: str,
         product_name: str,
         quantity: float,
-        shipment_date: date,
+        shipment_date: date | None,
         route_id: int,
         status: str = ORDER_STATUS_NEW,
         planning_mode: str = PLANNING_MODE_SHIPMENT,
@@ -110,7 +110,7 @@ class OrdersRepository:
         client_name: str,
         product_name: str,
         quantity: float,
-        shipment_date: date,
+        shipment_date: date | None,
         route_id: int,
         status: str,
         planning_mode: str = PLANNING_MODE_SHIPMENT,
@@ -154,6 +154,8 @@ class OrdersRepository:
             order.calculated_start_date = None
         if status == ORDER_STATUS_CANCELLED:
             order.calculated_start_date = None
+            order.calculated_shipment_date = None
+            order.priority = 0
             self._clear_order_conflicts(order_id)
         self.session.flush()
         return order
@@ -202,7 +204,7 @@ class OrdersRepository:
 
     def move_order(self, order_id: int, new_priority: int) -> None:
         """Move one order or its linked child block and close all priority gaps."""
-        orders = list(self.list_orders())
+        orders = [order for order in self.list_orders() if order.status == ORDER_STATUS_NEW]
         moving = self.get_order(order_id)
         if moving is None or not orders:
             return
@@ -224,7 +226,7 @@ class OrdersRepository:
 
     def normalize_priorities(self) -> None:
         """Persist one unique continuous sequence while preserving linked blocks."""
-        orders = list(self.list_orders())
+        orders = [order for order in self.list_orders() if order.status == ORDER_STATUS_NEW]
         emitted_groups: set[str] = set()
         normalized: list[Order] = []
         for order in orders:
@@ -242,4 +244,7 @@ class OrdersRepository:
                 normalized.append(order)
         for priority, order in enumerate(normalized, start=1):
             order.priority = priority
+        for order in self.list_orders():
+            if order.status != ORDER_STATUS_NEW:
+                order.priority = 0
         self.session.flush()

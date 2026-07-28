@@ -167,3 +167,7 @@ data/planner.sqlite3
 ```
 
 При первом запуске desktop-приложение создаёт каталог данных, создаёт таблицы и загружает текущие seed-данные только если файла базы ещё не было. При последующих запусках существующая база не удаляется, пользовательские данные не перезаписываются, а seed-данные автоматически не запускаются. Кнопки управления БД в боковой панели Streamlit сохранены.
+
+## Session drafts and atomic planning
+
+Editable registries now use session-scoped screen drafts. Adding or pre-deleting a row does not touch SQLite. The global save action validates all participating rows, applies the draft and rebuilds the plan in one transaction; validation and technical errors preserve the draft. Route/work-center saves are explicit section actions. Manual order status is limited to **Новый** and **Отменён**; planning outcome is displayed independently.

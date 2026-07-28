@@ -33,14 +33,16 @@ EDITOR_COLUMNS = [
     "Продукция",
     "Тираж",
     "Режим планирования",
-    "Фиксированная дата запуска",
+    "Заданная дата запуска",
+    "Заданная дата отгрузки",
     "Расчётная дата запуска",
-    "Срок отгрузки",
+    "Расчётная дата отгрузки",
     "Группа",
     "Связанная группа",
     "Маршрут",
     "Статус",
-    "Конфликт",
+    "Запланирован",
+    "Конфликт планирования",
 ]
 DRAFT_ORDER_SESSION_KEY = "orders_page_show_new_order_form"
 SELECTED_ORDER_SESSION_KEY = "orders_page_selected_order_id"
@@ -48,149 +50,82 @@ ORDER_EDITOR_KEY = "orders_page_editor"
 READ_ONLY_EDITOR_COLUMNS = [
     "ID",
     "Расчётная дата запуска",
-    "Конфликт",
+    "Запланирован",
+    "Конфликт планирования",
     "Группа",
     "Связанная группа",
 ]
 
 
 def render_orders_page() -> None:
-    """Render the orders registry with inline editing controls."""
+    """Render the registry over a session draft; SQLite is read only on load."""
     st.header("Реестр заказов")
-    st.caption(
-        "Редактируйте значения прямо в таблице. После нажатия кнопки «Сохранить изменения и пересчитать план» изменения сохраняются в реестре, затем запускается пересчёт производственного плана. Открытие страницы, выбор строки и редактирование ячеек без этой кнопки ничего не сохраняют и не пересчитывают."
-    )
-
+    flash = st.session_state.pop("draft_flash", None)
+    if flash:
+        st.success(flash)
     with SessionLocal() as session:
-        repository = OrdersRepository(session)
-        routes = list(
-            session.scalars(
-                select(Route).where(Route.is_active.is_(True)).order_by(Route.name)
-            ).all()
-        )
-        orders = list(
-            session.scalars(
-                select(Order)
-                .options(selectinload(Order.route), selectinload(Order.conflicts))
-                .order_by(Order.priority, Order.id)
-            ).all()
-        )
-
+        routes = list(session.scalars(select(Route).options(selectinload(Route.operations)).order_by(Route.name)).all())
+        routes = [route for route in routes if route.is_active and route.operations and all(op.is_active and op.work_center and op.work_center.is_active for op in route.operations)]
         route_by_name = {route.name: route for route in routes}
-        selected_order_id = st.session_state.get(SELECTED_ORDER_SESSION_KEY)
-        if selected_order_id not in {order.id for order in orders}:
-            selected_order_id = None
-            st.session_state[SELECTED_ORDER_SESSION_KEY] = None
-
+        orders = list(session.scalars(select(Order).options(selectinload(Order.route), selectinload(Order.conflicts), selectinload(Order.planned_operations)).order_by(Order.id)).all())
         _render_route_capacity_check(session, routes)
+        if st.button("Добавить заказ", disabled=not routes, key="show_add_order"):
+            st.session_state[DRAFT_ORDER_SESSION_KEY] = True
+        if st.session_state.get(DRAFT_ORDER_SESSION_KEY):
+            _render_new_order_form(session, OrdersRepository(session), routes, route_by_name)
 
-        if not routes:
-            st.warning(
-                "Для добавления или редактирования заказа сначала создайте активный маршрут."
+        if "orders_draft_rows" not in st.session_state:
+            st.session_state.orders_draft_rows = build_order_editor_rows(orders, selected_order_id=None, include_draft=False)
+            st.session_state.orders_pending_delete_ids = set()
+        rows = st.session_state.orders_draft_rows
+        edited = st.data_editor(rows, key=ORDER_EDITOR_KEY, use_container_width=True, hide_index=True,
+            disabled=READ_ONLY_EDITOR_COLUMNS, column_order=EDITOR_COLUMNS, num_rows="fixed",
+            column_config={
+                "Выбран": st.column_config.CheckboxColumn("Выбран"),
+                "Статус": st.column_config.SelectboxColumn("Статус", options=list(MANUAL_ORDER_STATUSES)),
+                "Маршрут": st.column_config.SelectboxColumn("Маршрут", options=list(route_by_name)),
+            }) if rows else []
+        # Capture the current editor value on every rerun, including the button rerun.
+        st.session_state.orders_draft_rows = edited
+        selected = [row for row in edited if row.get("Выбран")]
+        if st.button("Удалить выбранные заказы", disabled=not selected, use_container_width=True):
+            pending = st.session_state.orders_pending_delete_ids
+            for row in selected:
+                if isinstance(row.get("ID"), int) and row["ID"] > 0:
+                    pending.add(row["ID"])
+            st.session_state.orders_draft_rows = [row for row in edited if not row.get("Выбран")]
+            st.rerun()
+        if st.button("Сохранить все изменения и пересчитать план", use_container_width=True):
+            from app.services.draft_commit_service import DraftBundle, DraftCommitService, success_flash
+            bundle = DraftBundle(
+                orders=[_editor_row_to_draft(row, route_by_name) for row in edited],
+                pending_delete_ids=set(st.session_state.orders_pending_delete_ids),
             )
-
-        if bool(st.session_state.get(DRAFT_ORDER_SESSION_KEY)):
-            _render_new_order_form(session, repository, routes, route_by_name)
-
-        rows = build_order_editor_rows(
-            orders, selected_order_id=selected_order_id, include_draft=False
-        )
-        edited_rows = rows
-        if not rows:
-            st.info(
-                "Заказы пока не заведены. Нажмите «Добавить заказ» или загрузите demo-данные."
-            )
-        else:
-            _sync_order_editor_state(rows)
-            # The submit button deliberately lives in the same form as the editor.
-            # Streamlit otherwise runs the script for the button click before the
-            # browser has necessarily sent the last edited cell.
-            with st.form("orders_page_editor_form"):
-                edited_rows = st.data_editor(
-                    rows,
-                    key=ORDER_EDITOR_KEY,
-                    use_container_width=True,
-                    hide_index=True,
-                    disabled=READ_ONLY_EDITOR_COLUMNS,
-                    column_order=EDITOR_COLUMNS,
-                    num_rows="fixed",
-                    column_config={
-                        "Выбран": st.column_config.CheckboxColumn(
-                            "Выбран", help="Отметьте один заказ для удаления."
-                        ),
-                        "ID": st.column_config.NumberColumn("ID", disabled=True),
-                        "Приоритет": st.column_config.NumberColumn(
-                            "Приоритет", min_value=1, max_value=len(rows), step=1
-                        ),
-                        "Тираж": st.column_config.NumberColumn(
-                            "Тираж", min_value=0.01, step=100.0
-                        ),
-                        "Срок отгрузки": st.column_config.DateColumn(
-                            "Срок отгрузки", format="DD.MM.YYYY"
-                        ),
-                        "Маршрут": st.column_config.SelectboxColumn(
-                            "Маршрут", options=list(route_by_name)
-                        ),
-                        "Статус": st.column_config.SelectboxColumn(
-                            "Статус", options=list(ORDER_STATUSES)
-                        ),
-                        "Режим планирования": st.column_config.SelectboxColumn(
-                            "Режим планирования", options=list(PLANNING_MODES)
-                        ),
-                        "Фиксированная дата запуска": st.column_config.DateColumn(
-                            "Фиксированная дата запуска", format="DD.MM.YYYY"
-                        ),
-                        "Расчётная дата запуска": st.column_config.DateColumn(
-                            "Расчётная дата запуска", format="DD.MM.YYYY", disabled=True
-                        ),
-                        "Группа": st.column_config.TextColumn("Группа", disabled=True),
-                        "Связанная группа": st.column_config.CheckboxColumn(
-                            "Связанная группа", disabled=True
-                        ),
-                        "Конфликт": st.column_config.CheckboxColumn(
-                            "Конфликт", disabled=True
-                        ),
-                    },
-                )
-                save_requested = st.form_submit_button(
-                    "Сохранить изменения и пересчитать план",
-                    use_container_width=True,
-                    disabled=not routes,
-                )
-
-        add_col, delete_col = st.columns(2)
-        with add_col:
-            if st.button(
-                "Добавить заказ", use_container_width=True, disabled=not routes
-            ):
-                st.session_state[DRAFT_ORDER_SESSION_KEY] = True
+            result = DraftCommitService(session).commit(bundle, sections={"orders"})
+            if result.ok:
+                st.session_state.pop("orders_draft_rows", None)
+                st.session_state.orders_pending_delete_ids = set()
+                st.session_state.draft_flash = success_flash(result.summary)
                 st.rerun()
-        with delete_col:
-            if st.button(
-                "Удалить заказ",
-                use_container_width=True,
-                disabled=selected_order_id is None,
-            ):
-                if selected_order_id is not None and repository.delete_order(
-                    int(selected_order_id)
-                ):
-                    session.commit()
-                    _clear_orders_page_state()
-                    recalculate_after_save(session)
-                    st.rerun()
-                st.error("Выбранный заказ не найден.")
+            for error in result.errors:
+                st.error(error)
 
-        if not rows:
-            save_requested = False
-        if rows:
-            _process_editor_changes(
-                session,
-                repository,
-                orders,
-                edited_rows,
-                route_by_name,
-                save_requested=save_requested,
-            )
+
+def _editor_row_to_draft(row: dict[str, Any], route_by_name: dict[str, Route]) -> dict[str, Any]:
+    route = route_by_name.get(row.get("Маршрут"))
+    return {
+        "id": row.get("ID"), "priority": row.get("Приоритет"),
+        "order_number": row.get("Номер"), "client_name": row.get("Клиент"),
+        "product_name": row.get("Продукция"), "quantity": row.get("Тираж"),
+        "planning_mode": row.get("Режим планирования"),
+        "fixed_start_date": row.get("Заданная дата запуска", row.get("Фиксированная дата запуска")),
+        "shipment_date": row.get("Заданная дата отгрузки", row.get("Срок отгрузки")),
+        "route_id": route.id if route else None, "status": row.get("Статус"),
+        "child_group_key": row.get("Группа") or None,
+        "child_sequence_number": row.get("Номер в группе"),
+        "is_child_order": bool(row.get("Группа")),
+        "is_linked_child_group": bool(row.get("Связанная группа")),
+    }
 
 
 NEW_ORDER_DEFAULTS = {
@@ -291,7 +226,7 @@ def _render_new_order_form(
             "Дочерние заказы связанные", value=bool(state["linked"]), key="new_linked"
         )
     save_col, clear_col = st.columns(2)
-    if save_col.button("Сохранить", use_container_width=True, key="new_save"):
+    if save_col.button("Добавить заказ", use_container_width=True, key="new_save"):
         _save_new_order_form(session, repository, state, route_by_name)
     if clear_col.button("Очистить поле", use_container_width=True, key="new_clear"):
         st.session_state["orders_page_new_order_form"] = dict(NEW_ORDER_DEFAULTS)
@@ -312,94 +247,32 @@ def _render_new_order_form(
         st.rerun()
 
 
-def _save_new_order_form(
-    session,
-    repository: OrdersRepository,
-    state: dict[str, Any],
-    route_by_name: dict[str, Route],
-) -> None:
-    row = {
-        "Номер": state["order_number"],
-        "Клиент": state["client_name"],
-        "Продукция": state["product_name"],
-        "Тираж": state["quantity"],
-        "Срок отгрузки": state["shipment_date"],
-        "Маршрут": state["route_name"],
-        "Статус": ORDER_STATUS_NEW,
-    }
-    errors = validate_order_editor_row(
-        row,
-        route_names=set(route_by_name),
-        existing_numbers={o.order_number: o.id for o in repository.list_orders()},
-        current_order_id=None,
-    )
-    if state["planning_mode"] == PLANNING_MODE_START and not isinstance(
-        state.get("fixed_start_date"), date
-    ):
-        errors.append("Дата запуска обязательна.")
-    if state.get("split"):
-        child_size = _parse_quantity(state.get("child_size")) or 0
-        if child_size <= 0:
-            errors.append("Размер дочернего заказа должен быть больше нуля.")
-        if child_size >= float(state.get("quantity") or 0):
-            errors.append(
-                "Размер дочернего заказа должен быть меньше общего количества заказа"
-            )
-    if errors:
-        for error in errors:
-            st.error(error)
-        return
-    payload = _row_to_order_payload(row, route_by_name)
-    payload.update(
-        {
-            "planning_mode": state["planning_mode"],
-            "fixed_start_date": state.get("fixed_start_date"),
-        }
-    )
-    if not state.get("split"):
-        repository.create_order(**payload)
-    else:
-        total = float(state["quantity"])
-        size = float(state["child_size"])
-        base = str(state["order_number"]).strip()
-        quantities = _split_child_quantities(total, size)
-        child_numbers = [f"{base}.{seq}" for seq in range(1, len(quantities) + 1)]
-        conflicts = [
-            number
-            for number in child_numbers
-            if repository.get_by_number(number) is not None
-        ]
-        if conflicts:
-            st.error(
-                "Невозможно создать группу: уже существуют заказы с номерами: "
-                + ", ".join(conflicts)
-            )
-            return
-        try:
-            # A savepoint makes the group all-or-nothing even if a later flush
-            # fails (for example because another writer inserted a number).
-            with session.begin_nested():
-                for seq, (number, qty) in enumerate(
-                    zip(child_numbers, quantities, strict=True), start=1
-                ):
-                    child_payload = {
-                        **payload,
-                        "order_number": number,
-                        "quantity": qty,
-                        "child_group_key": base,
-                        "child_sequence_number": seq,
-                        "is_child_order": True,
-                        "is_linked_child_group": bool(state.get("linked")),
-                    }
-                    repository.create_order(**child_payload)
-        except Exception as exc:
-            session.rollback()
-            st.error(f"Не удалось создать группу дочерних заказов: {exc}")
-            return
-    session.commit()
-    _clear_route_capacity_cache()
-    st.success("Заказ сохранён. Пересчёт плана не запускался.")
-    _clear_orders_page_state(close_form=True)
+def _save_new_order_form(session, repository: OrdersRepository, state: dict[str, Any], route_by_name: dict[str, Route]) -> None:
+    """Append form values to the screen draft without validation or DB writes."""
+    rows = st.session_state.setdefault("orders_draft_rows", [])
+    next_id = min([int(row.get("ID")) for row in rows if isinstance(row.get("ID"), int) and row.get("ID") < 0] or [0]) - 1
+    quantities = [state.get("quantity")]
+    numbers = [str(state.get("order_number") or "")]
+    if state.get("split") and float(state.get("child_size") or 0) > 0:
+        quantities = _split_child_quantities(float(state.get("quantity") or 0), float(state["child_size"]))
+        numbers = [f"{state.get('order_number')}.{i}" for i in range(1, len(quantities) + 1)]
+    priority = 1 + sum(row.get("Статус") == ORDER_STATUS_NEW for row in rows)
+    for sequence, (number, quantity) in enumerate(zip(numbers, quantities, strict=True), 1):
+        rows.append({
+            "Выбран": False, "ID": next_id, "Приоритет": priority,
+            "Номер": number, "Клиент": state.get("client_name", ""),
+            "Продукция": state.get("product_name", ""), "Тираж": quantity,
+            "Режим планирования": state.get("planning_mode"),
+            "Заданная дата запуска": state.get("fixed_start_date") if state.get("planning_mode") == PLANNING_MODE_START else None,
+            "Заданная дата отгрузки": state.get("shipment_date") if state.get("planning_mode") == PLANNING_MODE_SHIPMENT else None,
+            "Расчётная дата запуска": None, "Расчётная дата отгрузки": None,
+            "Группа": str(state.get("order_number") or "") if len(numbers) > 1 else "",
+            "Номер в группе": sequence if len(numbers) > 1 else None,
+            "Связанная группа": bool(state.get("linked")), "Маршрут": state.get("route_name"),
+            "Статус": ORDER_STATUS_NEW, "Запланирован": False, "Конфликт планирования": False,
+        })
+        next_id -= 1; priority += 1
+    st.session_state[DRAFT_ORDER_SESSION_KEY] = False
     st.rerun()
 
 

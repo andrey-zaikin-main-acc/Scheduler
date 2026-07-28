@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.constants import (
@@ -76,6 +76,10 @@ class RecalculationService:
         self.session.flush()
 
         previous_plan = self._current_plan_snapshot()
+        previously_planned = {
+            order_id: min(dates[0] for (oid, _), dates in previous_plan.items() if oid == order_id)
+            for order_id in {key[0] for key in previous_plan}
+        }
         self.plan_repository.clear_plan()
         self.conflicts_repository.clear_conflicts()
 
@@ -93,8 +97,13 @@ class RecalculationService:
         # Repair priorities imported from legacy/corrupt databases before they
         # become the planner's sole queue criterion.
         self.orders_repository.normalize_priorities()
-        prepared_orders, invalid_results = self._prepare_orders(orders_by_id)
-        sorted_orders = sort_prepared_orders(prepared_orders)
+        prepared_orders, invalid_results = self._prepare_orders(orders_by_id, set(previously_planned))
+        # Saved plan is protected from newly entered priority: old planned work is
+        # rebuilt first in its previous chronological order.  A manual "Новый"
+        # status explicitly forfeits that protection.
+        protected = [p for p in prepared_orders if p.order.id in previously_planned and orders_by_id[p.order.id].status != ORDER_STATUS_NEW]
+        new = [p for p in prepared_orders if p not in protected]
+        sorted_orders = tuple(sorted(protected, key=lambda p: (previously_planned[p.order.id], p.order.id))) + sort_prepared_orders(new)
 
         planned_order_count = 0
         conflicted_order_count = 0
@@ -139,7 +148,9 @@ class RecalculationService:
             f"конфликтов: {conflicted_order_count}; "
             f"операций: {planned_operation_count}."
         )
-        self.session.commit()
+        # Transaction ownership intentionally belongs to the caller.  This makes
+        # draft application, deletion and recalculation one atomic unit.
+        self.session.flush()
 
         return RecalculationSummary(
             planned_orders=planned_order_count,
@@ -150,14 +161,14 @@ class RecalculationService:
         )
 
     def _prepare_orders(
-        self, orders_by_id: dict[int, Order]
+        self, orders_by_id: dict[int, Order], previously_planned_ids: set[int] | None = None
     ) -> tuple[list[PreparedOrder], list[PlannedOrderResult]]:
         prepared_orders: list[PreparedOrder] = []
         invalid_results: list[PlannedOrderResult] = []
 
         orders = self.session.scalars(
             select(Order)
-            .where(Order.status.in_(PLANNABLE_ORDER_STATUSES))
+            .where(or_(Order.status.in_(PLANNABLE_ORDER_STATUSES), Order.id.in_(previously_planned_ids or set())))
             .order_by(Order.priority, Order.id)
         ).all()
         orders_by_id.update((order.id, order) for order in orders)
@@ -183,10 +194,20 @@ class RecalculationService:
                     map_route_operation_to_planning(operation)
                     for operation in route.operations
                 )
-                if route
+                if route and route.is_active and all(op.is_active and op.work_center and op.work_center.is_active for op in route.operations)
                 else ()
             )
             try:
+                if route is None:
+                    raise ValueError("Маршрут не найден")
+                if not route.is_active:
+                    raise ValueError("Маршрут неактивен")
+                if not route.operations:
+                    raise ValueError("Маршрут не содержит операций")
+                if any(not op.is_active for op in route.operations):
+                    raise ValueError("Операция маршрута неактивна")
+                if any(not op.work_center or not op.work_center.is_active for op in route.operations):
+                    raise ValueError("Участок неактивен")
                 prepared_orders.append(prepare_order(planning_order, route_operations))
             except ValueError as exc:
                 invalid_results.append(
@@ -195,7 +216,7 @@ class RecalculationService:
                         calculated_start_date=None,
                         conflict=PlanningConflict(
                             order_id=order.id,
-                            shipment_date=order.shipment_date,
+                            shipment_date=order.shipment_date or order.fixed_start_date,
                             work_center_id=None,
                             required_hours=0.0,
                             available_hours=0.0,
@@ -260,10 +281,11 @@ class RecalculationService:
     def _persist_successful_result(
         self, result: PlannedOrderResult, order: Order
     ) -> None:
-        order.status = ORDER_STATUS_PLANNED
+        order.status = ""
+        order.priority = 0
         order.calculated_start_date = result.calculated_start_date
         if order.planning_mode == PLANNING_MODE_START and result.operations:
-            order.shipment_date = max(
+            order.calculated_shipment_date = max(
                 day.end_datetime
                 for operation in result.operations
                 for day in operation.days
@@ -284,8 +306,10 @@ class RecalculationService:
         if order is None:
             order = self.orders_repository.get_order(result.order_id)
         if order is not None:
-            order.status = ORDER_STATUS_NEW
+            order.status = ""
+            order.priority = 0
             order.calculated_start_date = None
+            order.calculated_shipment_date = None
         self.conflicts_repository.add_conflict(map_conflict_to_orm(result.conflict))
 
     def _current_plan_snapshot(self) -> dict[tuple[int, int], tuple[date, date]]:
@@ -330,6 +354,7 @@ class RecalculationService:
                 PlanChange(
                     recalculation_run_id=recalculation_run_id,
                     order_id=order_id,
+                    operation_sequence_number=sequence_number,
                     change_type=change_type,
                     old_start_date=old_dates[0] if old_dates else None,
                     old_end_date=old_dates[1] if old_dates else None,

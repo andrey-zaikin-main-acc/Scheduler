@@ -168,3 +168,7 @@
 
 - `default_free_slot_days = 30`;
 - `max_backward_search_months = 12`.
+
+## Model migration (session-draft release)
+
+`orders.calculated_shipment_date` separates planner output from the requested `shipment_date`; start-driven legacy results are recovered from the last saved operation. A blank persisted status represents system-owned planning outcome while `Новый`/`Отменён` remain manual values. `route_operations.is_active` is a non-null boolean with `DEFAULT 1`. `plan_changes.operation_sequence_number` is a stable history key independent of recreated planned-operation IDs. Migrations use column inspection and are idempotent; legacy columns such as `workday_start_time` remain for compatibility but are not editable.

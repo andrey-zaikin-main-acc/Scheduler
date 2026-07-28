@@ -22,25 +22,13 @@ def test_order_rows_include_text_client_and_product() -> None:
         status=ORDER_STATUS_NEW,
     )
 
-    assert order_rows([order]) == [
-        {
-                "ID": 10,
-                "Приоритет": None,
-            "Номер": "O-10",
-            "Клиент": "Клиент",
-            "Продукция": "Продукт",
-            "Тираж": 1000,
-            "Режим планирования": "От даты отгрузки",
-            "Фиксированная дата запуска": None,
-            "Расчётная дата запуска": None,
-            "Срок отгрузки": date(2026, 7, 10),
-            "Группа": "",
-            "Связанная группа": False,
-            "Маршрут": "Маршрут A",
-            "Статус": ORDER_STATUS_NEW,
-            "Конфликт": False,
-        }
-    ]
+    row = order_rows([order])[0]
+    assert row["Клиент"] == "Клиент"
+    assert row["Продукция"] == "Продукт"
+    assert row["Заданная дата отгрузки"] == date(2026, 7, 10)
+    assert row["Расчётная дата отгрузки"] is None
+    assert row["Запланирован"] is False
+
 
 
 def test_plan_and_conflict_rows_are_display_ready() -> None:

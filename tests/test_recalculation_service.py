@@ -77,7 +77,7 @@ def test_recalculation_service_persists_successful_plan(session: Session) -> Non
     assert session.query(PlannedOperation).count() == 1
     assert session.query(PlannedOperationDay).count() == 1
     assert session.query(PlanningConflict).count() == 0
-    assert order.status == ORDER_STATUS_PLANNED
+    assert order.status == ""
     assert order.calculated_start_date == date(2026, 7, 10)
 
 
@@ -105,7 +105,7 @@ def test_recalculation_service_persists_conflict(session: Session) -> None:
     assert summary.planned_orders == 0
     assert summary.conflicts == 1
     assert session.query(PlannedOperation).count() == 0
-    assert order.status == ORDER_STATUS_NEW
+    assert order.status == ""
     assert conflict.order_id == order.id
     assert conflict.deficit_hours == pytest.approx(3 - 1 / 31)
 
@@ -184,7 +184,7 @@ def test_recalculation_persists_high_capacity_order_within_shipment_date(
 
     assert summary.planned_orders == 1
     assert summary.conflicts == 0
-    assert order.status == ORDER_STATUS_PLANNED
+    assert order.status == ""
     assert order.calculated_start_date == order.shipment_date
     assert session.query(PlannedOperation).count() == 1
 
@@ -209,14 +209,14 @@ def test_recalculation_recomputes_start_and_status_after_shipment_date_change(
 
     service = RecalculationService(session, planning_start_date=date(2026, 7, 1))
     service.recalculate_plan()
-    assert order.status == ORDER_STATUS_PLANNED
+    assert order.status == ""
     assert order.calculated_start_date == date(2026, 7, 10)
 
     order.shipment_date = date(2026, 7, 1)
     session.commit()
     service.recalculate_plan()
 
-    assert order.status == ORDER_STATUS_PLANNED
+    assert order.status == ""
     assert order.calculated_start_date == date(2026, 7, 1)
     last_day = session.query(PlannedOperationDay).one()
     assert last_day.end_datetime.date() <= order.shipment_date
@@ -259,7 +259,7 @@ def test_order_update_clears_stale_calculated_start_date_before_recalculation(
         session, planning_start_date=date(2026, 7, 1)
     ).recalculate_plan()
 
-    assert updated.status == ORDER_STATUS_PLANNED
+    assert updated.status == ""
     assert updated.calculated_start_date == date(2026, 7, 1)
 
 
@@ -317,7 +317,7 @@ def test_conflicted_order_participates_again_and_can_become_planned(
         session, planning_start_date=date(2026, 7, 1)
     ).recalculate_plan()
 
-    assert order.status == ORDER_STATUS_PLANNED
+    assert order.status == ""
     assert session.query(PlannedOperation).filter_by(order_id=order.id).count() == 1
 
 

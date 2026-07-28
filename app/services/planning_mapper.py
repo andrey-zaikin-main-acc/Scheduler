@@ -18,7 +18,7 @@ def map_order_to_planning(order: Order) -> PlanningOrder:
         id=order.id,
         quantity=order.quantity,
         shipment_date=order.shipment_date,
-        status=order.status,
+        status=order.status or ORDER_STATUS_PLANNED,
         priority=order.priority,
         planning_mode=order.planning_mode,
         fixed_start_date=order.fixed_start_date,

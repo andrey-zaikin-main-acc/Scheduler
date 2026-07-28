@@ -55,6 +55,7 @@ class RoutesRepository:
         work_center_id: int,
         labor_hours_per_1000: float,
         min_transfer_quantity_to_next: float | None = None,
+        is_active: bool = True,
     ) -> RouteOperation:
         """Append or insert a route operation."""
         operation = RouteOperation(
@@ -63,6 +64,7 @@ class RoutesRepository:
             work_center_id=work_center_id,
             labor_hours_per_1000=labor_hours_per_1000,
             min_transfer_quantity_to_next=min_transfer_quantity_to_next,
+            is_active=is_active,
         )
         self.session.add(operation)
         self.session.flush()
@@ -89,6 +91,7 @@ class RoutesRepository:
         work_center_id: int,
         labor_hours_per_1000: float,
         min_transfer_quantity_to_next: float | None = None,
+        is_active: bool = True,
     ) -> RouteOperation | None:
         """Update a route operation."""
         operation = self.session.get(RouteOperation, operation_id)
@@ -98,6 +101,7 @@ class RoutesRepository:
         operation.work_center_id = work_center_id
         operation.labor_hours_per_1000 = labor_hours_per_1000
         operation.min_transfer_quantity_to_next = min_transfer_quantity_to_next
+        operation.is_active = is_active
         self.session.flush()
         return operation
 

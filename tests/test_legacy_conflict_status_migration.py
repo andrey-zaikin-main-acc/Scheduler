@@ -36,7 +36,7 @@ def test_migration_converts_legacy_conflict_status(monkeypatch) -> None:
     with Session(engine) as session:
         order = session.scalar(select(Order).where(Order.order_number == "LEGACY-1"))
         assert order is not None
-        assert order.status == ORDER_STATUS_NEW
+        assert order.status == ""
         assert order.calculated_start_date is None
         conflicts = session.scalars(select(PlanningConflict)).all()
         assert len(conflicts) == 1
