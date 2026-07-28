@@ -371,6 +371,25 @@ def test_start_driven_conflict_can_store_null_shipment_date(session: Session) ->
     assert order.calculated_shipment_date is None
 
 
+def test_conflict_survives_two_consecutive_recalculations(session: Session) -> None:
+    route = create_route_with_operation(session, hours_per_day=1, labor_hours_per_1000=3)
+    route.is_active = False
+    order = Order(
+        order_number="REPEAT-CONFLICT", client_name="Клиент", product_name="Продукт",
+        quantity=1000, shipment_date=date(2026, 7, 10), route_id=route.id,
+        status=ORDER_STATUS_NEW,
+    )
+    session.add(order); session.flush()
+    service = RecalculationService(session, planning_start_date=date(2026, 7, 1))
+
+    first = service.recalculate_plan()
+    second = service.recalculate_plan()
+
+    assert first.conflicts == second.conflicts == 1
+    assert session.query(PlanningConflict).filter_by(order_id=order.id).count() == 1
+    assert session.query(PlannedOperation).filter_by(order_id=order.id).count() == 0
+
+
 def test_previously_planned_order_stays_cancelled(session: Session) -> None:
     from app.constants import ORDER_STATUS_CANCELLED
     route = create_route_with_operation(session, hours_per_day=248, labor_hours_per_1000=8)

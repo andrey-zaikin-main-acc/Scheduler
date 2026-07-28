@@ -17,6 +17,7 @@ from app.db.models import (
     Order,
     PlanChange,
     PlannedOperation,
+    PlanningConflict as PlanningConflictModel,
     RecalculationRun,
     Route,
     RouteOperation,
@@ -77,6 +78,9 @@ class RecalculationService:
         self.session.flush()
 
         previous_plan = self._current_plan_snapshot()
+        previously_conflicted = set(
+            self.session.scalars(select(PlanningConflictModel.order_id)).all()
+        )
         previously_planned = {
             order_id: min(dates[0] for (oid, _), dates in previous_plan.items() if oid == order_id)
             for order_id in {key[0] for key in previous_plan}
@@ -105,7 +109,9 @@ class RecalculationService:
         # Repair priorities imported from legacy/corrupt databases before they
         # become the planner's sole queue criterion.
         self.orders_repository.normalize_priorities()
-        prepared_orders, invalid_results = self._prepare_orders(orders_by_id, set(previously_planned))
+        prepared_orders, invalid_results = self._prepare_orders(
+            orders_by_id, set(previously_planned), previously_conflicted
+        )
         # Saved plan is protected from newly entered priority: old planned work is
         # rebuilt first in its previous chronological order.  A manual "Новый"
         # status explicitly forfeits that protection.
@@ -169,7 +175,10 @@ class RecalculationService:
         )
 
     def _prepare_orders(
-        self, orders_by_id: dict[int, Order], previously_planned_ids: set[int] | None = None
+        self,
+        orders_by_id: dict[int, Order],
+        previously_planned_ids: set[int] | None = None,
+        previously_conflicted_ids: set[int] | None = None,
     ) -> tuple[list[PreparedOrder], list[PlannedOrderResult]]:
         prepared_orders: list[PreparedOrder] = []
         invalid_results: list[PlannedOrderResult] = []
@@ -180,6 +189,7 @@ class RecalculationService:
                 or_(
                     Order.status.in_(PLANNABLE_ORDER_STATUSES),
                     Order.id.in_(previously_planned_ids or set()),
+                    Order.id.in_(previously_conflicted_ids or set()),
                 ),
                 Order.status != ORDER_STATUS_CANCELLED,
             )

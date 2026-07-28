@@ -78,3 +78,10 @@ def test_priorities_are_applied_in_one_continuous_pass():
     assert [(o.order_number,o.priority) for o in s.query(Order).order_by(Order.priority)] == [
         ('P-3',1), ('P-2',2), ('P-1',3)
     ]
+
+
+def test_server_validation_rejects_date_incompatible_with_mode():
+    s=make_session(); route=seed(s)
+    row=valid_row(route.id); row['fixed_start_date']=date(2026,7,1)
+    errors=DraftCommitService(s).validate(DraftBundle(orders=[row]), sections={'orders'})
+    assert any('fixed_start_date должно быть пустым' in error for error in errors)

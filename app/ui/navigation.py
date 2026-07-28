@@ -17,7 +17,6 @@ def render_navigation() -> None:
     """Render navigation and dispatch the selected MVP screen."""
     st.title("Production Planner MVP")
     st.caption("Локальный прототип планирования производства с SQLite")
-    render_bootstrap_controls()
     page = st.sidebar.radio(
         "Раздел",
         [
@@ -48,3 +47,7 @@ def render_navigation() -> None:
         render_conflicts_page()
     elif page == "Результаты пересчёта":
         render_recalculation_results_page()
+
+    # Process save/recalculation only after the active page captured the latest
+    # widget value into its screen draft.
+    render_bootstrap_controls()

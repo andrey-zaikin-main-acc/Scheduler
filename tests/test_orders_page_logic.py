@@ -19,6 +19,9 @@ from app.ui.pages.orders_page import (
     build_order_editor_rows,
     order_status_options_for_row,
     READ_ONLY_EDITOR_COLUMNS,
+    EDITOR_COLUMNS,
+    apply_scheduling_overrides,
+    reconcile_priority_move,
     normalize_editor_date,
     validate_order_editor_row,
 )
@@ -639,16 +642,67 @@ def test_only_global_recalculation_button_remains() -> None:
     assert sources.count('st.button("Пересчитать план")') == 1
 
 
-def test_calculated_dates_are_read_only_and_child_sequence_is_in_rows() -> None:
+def test_calculated_dates_are_read_only_and_child_fields_are_hidden() -> None:
     assert "Расчётная дата запуска" in READ_ONLY_EDITOR_COLUMNS
     assert "Расчётная дата отгрузки" in READ_ONLY_EDITOR_COLUMNS
     order = _order(); order.child_sequence_number = 7; order.is_child_order = True
     row = build_order_editor_rows([order], selected_order_id=None, include_draft=False)[0]
-    assert row["Номер в группе"] == 7
-    assert row["Дочерний заказ"] is True
+    assert "Номер в группе" not in EDITOR_COLUMNS
+    assert "Дочерний заказ" not in EDITOR_COLUMNS
+    assert "Связанная группа" not in EDITOR_COLUMNS
+    assert "Связанные заказы" in EDITOR_COLUMNS
+    assert row["_child_sequence_number"] == 7
+    assert row["_is_child_order"] is True
     assert "Удалить выбранные заказы" in __import__("pathlib").Path(
         "app/ui/pages/orders_page.py"
     ).read_text()
+
+
+def _priority_rows() -> list[dict]:
+    return [
+        {"ID": i, "Приоритет": i, "Статус": ORDER_STATUS_NEW,
+         "Группа": "", "Связанные заказы": False}
+        for i in range(1, 4)
+    ]
+
+
+def test_priority_edit_two_to_three_is_a_move() -> None:
+    before = _priority_rows(); edited = [dict(row) for row in before]
+    edited[1]["Приоритет"] = 3
+    result = reconcile_priority_move(before, edited)
+    assert [row["ID"] for row in sorted(result, key=lambda r: r["Приоритет"])] == [1, 3, 2]
+
+
+def test_priority_edit_three_to_one_is_a_move() -> None:
+    before = _priority_rows(); edited = [dict(row) for row in before]
+    edited[2]["Приоритет"] = 1
+    result = reconcile_priority_move(before, edited)
+    assert [row["ID"] for row in sorted(result, key=lambda r: r["Приоритет"])] == [3, 1, 2]
+
+
+def test_linked_children_move_as_one_ordered_block() -> None:
+    before = _priority_rows()
+    before[1].update({"Группа": "G", "Связанные заказы": True, "_child_sequence_number": 1})
+    before[2].update({"Группа": "G", "Связанные заказы": True, "_child_sequence_number": 2})
+    edited = [dict(row) for row in before]; edited[2]["Приоритет"] = 1
+    result = reconcile_priority_move(before, edited)
+    assert [row["ID"] for row in sorted(result, key=lambda r: r["Приоритет"])] == [2, 3, 1]
+
+
+@pytest.mark.parametrize(
+    ("mode", "value", "start", "shipment"),
+    [
+        (PLANNING_MODE_START, date(2026, 8, 1), date(2026, 8, 1), None),
+        (PLANNING_MODE_SHIPMENT, date(2026, 8, 2), None, date(2026, 8, 2)),
+    ],
+)
+def test_scheduling_override_exposes_only_the_mode_specific_date(mode, value, start, shipment) -> None:
+    row = {"Режим планирования": PLANNING_MODE_SHIPMENT,
+           "Заданная дата запуска": date(2026, 7, 1),
+           "Заданная дата отгрузки": date(2026, 7, 2)}
+    result = apply_scheduling_overrides([row], {0: (mode, value)})[0]
+    assert result["Заданная дата запуска"] == start
+    assert result["Заданная дата отгрузки"] == shipment
 
 
 @pytest.mark.parametrize(
