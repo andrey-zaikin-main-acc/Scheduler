@@ -141,9 +141,38 @@ class FreeSlotsService:
         return results
 
     def find_shipment_slots(self, *, route_id: int, quantity: float, start_date: date, end_date: date) -> list[dict[str, date]]:
-        """Return shipment candidates paired with an approximate calculated start."""
-        starts = self.find_start_slots(route_id=route_id, quantity=quantity, start_date=start_date, end_date=end_date)
-        return [{"Расчётная дата запуска": row["Заданная дата запуска"], "Заданная дата отгрузки": row["Расчётная дата отгрузки"]} for row in starts if row["Расчётная дата отгрузки"] <= end_date]
+        """Check every requested shipment date by allocating route work backwards."""
+        route = self.session.scalar(select(Route).where(Route.id == route_id).options(
+            selectinload(Route.operations).selectinload(RouteOperation.work_center)))
+        if not route or not route.is_active or not route.operations or any(
+            not op.is_active or not op.work_center or not op.work_center.is_active
+            for op in route.operations
+        ):
+            return []
+        results: list[dict[str, date]] = []
+        for shipment in _date_range(start_date, end_date):
+            cursor = shipment
+            possible = True
+            for operation in reversed(route.operations):
+                hours = quantity * operation.labor_hours_per_1000 / 1000
+                while hours > 1e-9:
+                    occupied = self._occupied_hours_by_work_center_and_date(
+                        start_date=cursor, end_date=cursor
+                    ).get((operation.work_center_id, cursor), 0)
+                    free = max(0.0, daily_capacity_from_monthly(
+                        operation.work_center.available_hours_per_day, cursor
+                    ) - occupied)
+                    hours -= free
+                    if hours > 1e-9:
+                        cursor -= timedelta(days=1)
+                    if (shipment - cursor).days > 3660:
+                        possible = False
+                        break
+                if not possible:
+                    break
+            if possible:
+                results.append({"Расчётная дата запуска": cursor, "Заданная дата отгрузки": shipment})
+        return results
 
     def _free_slot_rows(self, *, start_date: date, end_date: date) -> list[FreeSlotRow]:
         work_centers = self.session.scalars(

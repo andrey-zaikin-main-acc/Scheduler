@@ -85,3 +85,26 @@ def test_server_validation_rejects_date_incompatible_with_mode():
     row=valid_row(route.id); row['fixed_start_date']=date(2026,7,1)
     errors=DraftCommitService(s).validate(DraftBundle(orders=[row]), sections={'orders'})
     assert any('fixed_start_date должно быть пустым' in error for error in errors)
+
+
+def test_local_route_validation_does_not_validate_order_draft():
+    s=make_session(); seed(s)
+    invalid_order=valid_row(999); invalid_order['client_name']=''
+    invalid_route={'ID':None,'Название':'','Описание':'','Активен':'yes','Операций':0}
+    errors=DraftCommitService(s).validate(
+        DraftBundle(orders=[invalid_order], routes=[invalid_route]), sections={'routes'}
+    )
+    assert errors and all(error.startswith('Маршруты') for error in errors)
+
+
+def test_reference_validation_rejects_invalid_flags_and_operation_values():
+    s=make_session(); route=seed(s)
+    rows=[{'ID':route.id,'Название':'R','Описание':'','Активен':True,'Операций':1}]
+    operations=[{'ID':None,'_route_id':route.id,'№':0,'Участок':'missing',
+                 'Трудоёмкость на 1000':0,'Мин. передаточная партия':-1,'Активна':'yes'}]
+    errors=DraftCommitService(s).validate(
+        DraftBundle(routes=rows, operations=operations), sections={'routes'}
+    )
+    assert any('поле «№»' in error for error in errors)
+    assert any('активный участок' in error for error in errors)
+    assert any('поле «Активна»' in error for error in errors)

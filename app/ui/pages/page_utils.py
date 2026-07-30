@@ -20,8 +20,8 @@ def recalculate_after_save(session: Session) -> None:
     st.success(f"Изменения сохранены. План пересчитан: запланировано — {summary.planned_orders}, конфликтов — {summary.conflicts}.")
 
 
-def commit_all_session_drafts() -> None:
-    """Sidebar adapter for the same atomic action as the registry button."""
+def commit_all_session_drafts(*, sections: set[str] | None = None, message_target=None) -> bool:
+    """Atomically save the requested screen drafts and recalculate exactly once."""
     from app.db.database import SessionLocal
     from app.db.models import Route
     from app.services.draft_commit_service import DraftBundle, DraftCommitService, success_flash
@@ -38,20 +38,34 @@ def commit_all_session_drafts() -> None:
             operations=list(st.session_state.get("route_operations_draft_rows", [])),
             work_centers=list(st.session_state.get("work_centers_draft_rows", [])),
         )
-        result = DraftCommitService(session).commit(bundle)
+        selected_sections = sections or {"orders", "routes", "work_centers"}
+        result = DraftCommitService(session).commit(bundle, sections=selected_sections)
         if result.ok:
             # Clear before rerun: Streamlit aborts execution at st.rerun().
+            section_keys = {
+                "orders": {"orders_draft_rows", "orders_page_editor", "orders_page_editor_signature",
+                           "orders_route_capacity_result", "orders_route_capacity_slots",
+                           "orders_page_show_new_order_form", "orders_page_selected_order_id"},
+                "routes": {"routes_draft_rows", "route_operations_draft_rows", "routes_page_route_editor",
+                           "routes_page_has_draft_route", "routes_page_has_draft_operation",
+                           "routes_page_selected_route_id", "routes_page_selected_operation_id"},
+                "work_centers": {"work_centers_draft_rows", "work_centers_page_editor",
+                                 "work_centers_page_has_draft_row", "work_centers_page_selected_id"},
+            }
+            clear_keys = set().union(*(section_keys[name] for name in selected_sections))
             for key in list(st.session_state):
-                if (key in {"orders_draft_rows", "routes_draft_rows", "route_operations_draft_rows",
-                            "work_centers_draft_rows", "orders_page_editor", "orders_page_editor_signature",
-                            "orders_route_capacity_result", "orders_route_capacity_slots"}
-                        or key.startswith("order_mode_") or key.startswith("order_date_")):
+                if (key in clear_keys or ("routes" in selected_sections and key.startswith("routes_page_operation_editor_"))
+                        or ("orders" in selected_sections and (key.startswith("order_mode_") or key.startswith("order_date_")))):
                     st.session_state.pop(key, None)
-            st.session_state["orders_pending_delete_ids"] = set()
+            if "orders" in selected_sections:
+                st.session_state["orders_pending_delete_ids"] = set()
             st.session_state["draft_flash"] = success_flash(result.summary)
             st.rerun()
+            return True
+        target = message_target or st.sidebar
         for error in result.errors:
-            st.sidebar.error(error)
+            target.error(error)
+        return False
 
 
 def normalize_date_range(value: object, default_start: date, default_end: date) -> tuple[date, date]:

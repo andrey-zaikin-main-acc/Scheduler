@@ -32,6 +32,8 @@ OPERATION_EDITOR_KEY = "routes_page_operation_editor"
 def render_routes_page() -> None:
     """Render routes and route operations with inline editing controls."""
     st.header("Справочник маршрутов")
+    if flash := st.session_state.pop("draft_flash", None):
+        st.success(flash)
     st.caption(
         "Изменения хранятся в черновике до явного сохранения раздела."
     )
@@ -57,9 +59,8 @@ def render_routes_page() -> None:
             ):
                 st.warning("Маршруты не удаляются физически. Снимите флаг «Активен» и сохраните раздел.")
 
-        route_rows_data = build_route_editor_rows(
-            routes,
-            selected_id=selected_route_id,
+        route_rows_data = st.session_state.get("routes_draft_rows") or build_route_editor_rows(
+            routes, selected_id=selected_route_id,
             include_draft=bool(st.session_state.get(DRAFT_ROUTE_SESSION_KEY)),
         )
         if not route_rows_data:
@@ -82,10 +83,17 @@ def render_routes_page() -> None:
                 "Операций": st.column_config.NumberColumn("Операций", disabled=True),
             },
         )
+        edited_routes, selected_route_id, selection_changed = reconcile_single_selection(
+            route_rows_data, edited_routes, previous_id=selected_route_id
+        )
         st.session_state["routes_draft_rows"] = edited_routes
+        if selection_changed:
+            st.session_state[SELECTED_ROUTE_SESSION_KEY] = selected_route_id
+            st.session_state[SELECTED_OPERATION_SESSION_KEY] = None
+            st.rerun()
         if save_section:
             from app.ui.pages.page_utils import commit_all_session_drafts
-            commit_all_session_drafts()
+            commit_all_session_drafts(sections={"routes"}, message_target=st)
 
         selected_route_id = st.session_state.get(SELECTED_ROUTE_SESSION_KEY)
         selected_route = next(
@@ -119,7 +127,7 @@ def _render_operations_table(
             st.warning("Операции не удаляются физически. Снимите флаг «Активна» и сохраните раздел.")
 
     work_center_by_name = {item.name: item for item in work_centers if item.is_active}
-    rows = build_operation_editor_rows(
+    rows = st.session_state.get("route_operations_draft_rows") or build_operation_editor_rows(
         route.operations,
         selected_id=selected_operation_id,
         include_draft=bool(st.session_state.get(DRAFT_OPERATION_SESSION_KEY)),
@@ -152,9 +160,28 @@ def _render_operations_table(
             ),
         },
     )
+    edited_rows, selected_operation_id, selection_changed = reconcile_single_selection(
+        rows, edited_rows, previous_id=selected_operation_id
+    )
     for row in edited_rows:
         row["_route_id"] = route.id
     st.session_state["route_operations_draft_rows"] = edited_rows
+    if selection_changed:
+        st.session_state[SELECTED_OPERATION_SESSION_KEY] = selected_operation_id
+        st.rerun()
+
+
+def reconcile_single_selection(
+    previous: list[dict[str, Any]], edited: list[dict[str, Any]], *, previous_id: int | None
+) -> tuple[list[dict[str, Any]], int | None, bool]:
+    """Keep the last newly checked persisted row as the sole selection."""
+    before = {row.get("ID") for row in previous if row.get("Выбран")}
+    checked = [row.get("ID") for row in edited if row.get("Выбран") and row.get("ID") is not None]
+    newly_checked = [item_id for item_id in checked if item_id not in before]
+    selected_id = int((newly_checked or checked)[-1]) if checked else None
+    for row in edited:
+        row["Выбран"] = row.get("ID") == selected_id
+    return edited, selected_id, selected_id != previous_id
 
 
 def build_route_editor_rows(

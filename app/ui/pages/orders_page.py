@@ -92,6 +92,7 @@ def render_orders_page() -> None:
             }) if rows else []
         edited = reconcile_priority_move(rows, edited)
         edited = normalize_scheduling_cells(rows, edited)
+        edited = protect_calculated_order_fields(rows, edited)
         # Capture the current editor value on every rerun. Navigation deliberately
         # handles the recalculation button after this page has rendered.
         st.session_state.orders_draft_rows = edited
@@ -355,6 +356,43 @@ def normalize_scheduling_cells(previous, edited):
     return result
 
 
+PLANNING_FIELDS = {
+    "Приоритет", "Тираж", "Маршрут", "Режим планирования",
+    "Заданная дата запуска", "Заданная дата отгрузки", "Группа",
+    "Связанные заказы", "_child_sequence_number", "_is_child_order",
+}
+
+
+def disabled_order_cells(row: dict[str, Any]) -> set[str]:
+    """Describe row-specific cells which the single-table contract locks."""
+    disabled = {"Расчётная дата запуска", "Расчётная дата отгрузки"}
+    if row.get("Статус") != ORDER_STATUS_NEW and (
+        row.get("Статус") in CALCULATED_ORDER_STATUSES
+        or row.get("Запланирован") or row.get("Конфликт планирования")
+    ):
+        disabled.update(PLANNING_FIELDS)
+    elif row.get("Режим планирования") == PLANNING_MODE_START:
+        disabled.add("Заданная дата отгрузки")
+    else:
+        disabled.add("Заданная дата запуска")
+    return disabled
+
+
+def protect_calculated_order_fields(previous, edited):
+    """Reject planning-cell edits until a calculated row is returned to New."""
+    old_by_id = {row.get("ID"): row for row in previous}
+    protected_rows = []
+    for row in edited:
+        item = dict(row)
+        old = old_by_id.get(item.get("ID"), {})
+        if item.get("Статус") != ORDER_STATUS_NEW:
+            for field in disabled_order_cells(old):
+                if field in PLANNING_FIELDS:
+                    item[field] = old.get(field)
+        protected_rows.append(item)
+    return protected_rows
+
+
 def apply_scheduling_overrides(rows, overrides):
     """Backward-compatible pure helper for older callers and stored sessions."""
     patched = []
@@ -470,9 +508,9 @@ def validate_order_editor_row(
     if current_order_id is not None and "Приоритет" in row and priority is None:
         errors.append("Приоритет должен быть целым числом не меньше 1.")
     if row.get("Режим планирования") == PLANNING_MODE_START:
-        if normalize_editor_date(row.get("Фиксированная дата запуска")) is None:
+        if normalize_editor_date(_scheduling_value(row, "Заданная дата запуска", "Фиксированная дата запуска")) is None:
             errors.append("Фиксированная дата запуска обязательна.")
-    elif normalize_editor_date(row.get("Срок отгрузки")) is None:
+    elif normalize_editor_date(_scheduling_value(row, "Заданная дата отгрузки", "Срок отгрузки")) is None:
         errors.append("Срок отгрузки обязателен.")
     if not route_name or route_name not in route_names:
         errors.append("Маршрут обязателен.")
@@ -642,11 +680,10 @@ def _row_to_order_payload(
         "client_name": str(row["Клиент"]).strip(),
         "product_name": str(row["Продукция"]).strip(),
         "quantity": float(row["Тираж"]),
-        "shipment_date": normalize_editor_date(row.get("Срок отгрузки"))
-        or normalize_editor_date(row.get("Фиксированная дата запуска")),
+        "shipment_date": normalize_editor_date(_scheduling_value(row, "Заданная дата отгрузки", "Срок отгрузки")),
         "planning_mode": row.get("Режим планирования") or PLANNING_MODE_SHIPMENT,
         "fixed_start_date": (
-            normalize_editor_date(row.get("Фиксированная дата запуска"))
+            normalize_editor_date(_scheduling_value(row, "Заданная дата запуска", "Фиксированная дата запуска"))
             if row.get("Режим планирования") == PLANNING_MODE_START
             else None
         ),
@@ -665,8 +702,8 @@ def _row_changed(row: dict[str, Any], order: Order) -> bool:
             str(row.get("Клиент") or "").strip() != order.client_name,
             str(row.get("Продукция") or "").strip() != order.product_name,
             _parse_quantity(row.get("Тираж")) != float(order.quantity),
-            normalize_editor_date(row.get("Срок отгрузки")) != order.shipment_date,
-            normalize_editor_date(row.get("Фиксированная дата запуска"))
+            normalize_editor_date(_scheduling_value(row, "Заданная дата отгрузки", "Срок отгрузки")) != order.shipment_date,
+            normalize_editor_date(_scheduling_value(row, "Заданная дата запуска", "Фиксированная дата запуска"))
             != order.fixed_start_date,
             row.get("Режим планирования") != order.planning_mode,
             row.get("Маршрут") != route_name,
@@ -679,8 +716,13 @@ def _row_changed(row: dict[str, Any], order: Order) -> bool:
 def _is_blank_draft_row(row: dict[str, Any]) -> bool:
     return not any(
         row.get(column)
-        for column in ["Номер", "Клиент", "Продукция", "Срок отгрузки", "Маршрут"]
+        for column in ["Номер", "Клиент", "Продукция", "Заданная дата запуска", "Заданная дата отгрузки", "Маршрут"]
     )
+
+
+def _scheduling_value(row: dict[str, Any], current: str, legacy: str) -> Any:
+    """Read current table keys while accepting drafts created before the rename."""
+    return row[current] if current in row else row.get(legacy)
 
 
 def _parse_quantity(value: Any) -> float | None:

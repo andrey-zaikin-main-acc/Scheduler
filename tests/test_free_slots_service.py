@@ -118,3 +118,16 @@ def test_route_capacity_uses_bottleneck_work_center(session: Session) -> None:
             "Ограничивающий участок": "Печать",
         }
     ]
+
+
+def test_shipment_slots_are_calculated_backwards_for_each_deadline(session: Session) -> None:
+    create_route_plan_fixture(session)
+    route_id = session.scalar(__import__("sqlalchemy").select(Route.id))
+    rows = FreeSlotsService(session).find_shipment_slots(
+        route_id=route_id, quantity=4000,
+        start_date=date(2026, 7, 10), end_date=date(2026, 7, 11),
+    )
+    assert [row["Заданная дата отгрузки"] for row in rows] == [
+        date(2026, 7, 10), date(2026, 7, 11)
+    ]
+    assert all(row["Расчётная дата запуска"] <= row["Заданная дата отгрузки"] for row in rows)

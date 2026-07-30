@@ -25,6 +25,8 @@ from app.ui.pages.orders_page import (
     normalize_editor_date,
     normalize_scheduling_cells,
     validate_order_editor_row,
+    disabled_order_cells,
+    protect_calculated_order_fields,
 )
 
 
@@ -32,6 +34,20 @@ def test_fractional_child_quantities_preserve_exact_total() -> None:
     quantities = _split_child_quantities(10.5, 3.2)
     assert quantities == pytest.approx([3.2, 3.2, 3.2, 0.9])
     assert sum(quantities) == pytest.approx(10.5)
+
+
+def test_calculated_row_planning_cells_stay_locked_until_returned_to_new() -> None:
+    previous = {**_order_row(_order()), "Статус": ORDER_STATUS_PLANNED,
+                "Запланирован": True, "Конфликт планирования": False}
+    assert {"Тираж", "Маршрут", "Режим планирования"} <= disabled_order_cells(previous)
+    protected = protect_calculated_order_fields(
+        [previous], [{**previous, "Тираж": 2000.0}]
+    )[0]
+    returned = protect_calculated_order_fields(
+        [previous], [{**previous, "Статус": ORDER_STATUS_NEW, "Тираж": 2000.0}]
+    )[0]
+    assert protected["Тираж"] == previous["Тираж"]
+    assert returned["Тираж"] == 2000.0
 
 
 def test_calculated_start_does_not_make_unchanged_row_dirty() -> None:

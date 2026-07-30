@@ -27,41 +27,26 @@ EDITOR_KEY = "work_centers_page_editor"
 def render_work_centers_page() -> None:
     """Edit work centers in session state and save only on explicit request."""
     st.header("Справочник участков")
+    if flash := st.session_state.pop("draft_flash", None):
+        st.success(flash)
     with SessionLocal() as session:
         repository = WorkCentersRepository(session)
         items = list(repository.list_work_centers())
         if "work_centers_draft_rows" not in st.session_state:
             st.session_state.work_centers_draft_rows = build_work_center_editor_rows(items, selected_id=None, include_draft=False)
-        if st.button("Добавить участок"):
+        add_col, delete_col = st.columns(2)
+        if add_col.button("Добавить участок"):
             st.session_state.work_centers_draft_rows.append({"Выбран": False, "ID": None, "Название": "", "Доступное время в месяц": 0.0, "Активен": True, "Нельзя прерывать заказ при планировании": False})
             st.rerun()
+        selected = [row for row in st.session_state.work_centers_draft_rows if row.get("Выбран")]
+        if delete_col.button("Удалить участок", disabled=not selected):
+            st.warning("Участки не удаляются физически. Снимите флаг «Активен» и сохраните раздел.")
         edited = st.data_editor(st.session_state.work_centers_draft_rows, key=EDITOR_KEY, hide_index=True,
             disabled=["ID"], column_order=EDITOR_COLUMNS, num_rows="fixed")
         st.session_state.work_centers_draft_rows = edited
         if st.button("Сохранить изменения раздела и пересчитать план", use_container_width=True):
-            errors=[]; names={}
-            for i,row in enumerate(edited,1):
-                name=str(row.get("Название") or "").strip(); hours=_parse_float(row.get("Доступное время в месяц"))
-                if not name: errors.append(f"Строка {i}, Название: обязательное поле")
-                if hours is None or hours <= 0: errors.append(f"Строка {i}, Доступное время в месяц: должно быть больше 0")
-                if name in names: errors.append(f"Строка {i}, Название: дубликат строки {names[name]}")
-                names[name]=i
-            if errors:
-                for error in errors: st.error(error)
-            else:
-                try:
-                    existing={item.id:item for item in items}
-                    for row in edited:
-                        payload={"name":str(row["Название"]).strip(), "available_hours_per_day":float(row["Доступное время в месяц"]), "workday_start_time":time(9), "is_active":bool(row["Активен"]), "prevent_order_interruption":bool(row["Нельзя прерывать заказ при планировании"])}
-                        if row.get("ID") in existing: repository.update_work_center(int(row["ID"]), **payload)
-                        else: repository.create_work_center(**payload)
-                    summary=__import__("app.services.recalculation_service",fromlist=["RecalculationService"]).RecalculationService(session).recalculate_plan()
-                    session.commit()
-                    st.session_state.pop("work_centers_draft_rows",None)
-                    st.session_state.draft_flash=__import__("app.services.draft_commit_service",fromlist=["success_flash"]).success_flash(summary)
-                    st.rerun()
-                except Exception as exc:
-                    session.rollback(); st.error(f"Техническая ошибка: {exc}")
+            from app.ui.pages.page_utils import commit_all_session_drafts
+            commit_all_session_drafts(sections={"work_centers"}, message_target=st)
 
 
 def build_work_center_editor_rows(
