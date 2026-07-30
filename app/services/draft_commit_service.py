@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.constants import MANUAL_ORDER_STATUSES, ORDER_STATUS_NEW, PLANNING_MODE_SHIPMENT, PLANNING_MODE_START
-from app.db.models import Order, Route
+from app.db.models import Order, Route, RouteOperation
 from app.repositories.orders_repository import OrdersRepository
 from app.services.recalculation_service import RecalculationService, RecalculationSummary
 
@@ -59,10 +59,20 @@ class DraftCommitService:
 
     def validate(self, draft: DraftBundle, *, sections: set[str]) -> list[str]:
         errors: list[str] = []
+        if "work_centers" in sections:
+            errors.extend(self._validate_work_centers(draft.work_centers))
+        if "routes" in sections:
+            errors.extend(self._validate_routes(draft.routes, draft.operations))
         if "orders" not in sections:
             return errors
         route_ids = set(self.session.scalars(select(Route.id)).all())
-        active_route_ids = set(self.session.scalars(select(Route.id).where(Route.is_active.is_(True))).all())
+        eligible_route_ids = {
+            route.id for route in self.session.scalars(select(Route)).all()
+            if route.is_active and route.operations and all(
+                operation.is_active and operation.work_center and operation.work_center.is_active
+                for operation in route.operations
+            )
+        }
         existing_orders = {order.id: order for order in self.session.scalars(select(Order)).all()}
         existing_statuses = {
             order.id: order.status for order in self.session.scalars(select(Order)).all()
@@ -82,15 +92,12 @@ class DraftCommitService:
             if number in numbers:
                 errors.append(f"{label}: поле order_number дублирует строку {numbers[number]}.")
             numbers[number] = index
+            status = row.get("status")
             if row.get("route_id") not in route_ids:
                 errors.append(f"{label}: поле route_id содержит неизвестный маршрут.")
-            elif row.get("id") not in existing_orders and row.get("route_id") not in active_route_ids:
-                errors.append(f"{label}: неактивный маршрут нельзя назначить новому заказу.")
-            status = row.get("status")
-            unchanged_system_status = (
-                status in ("", None)
-                and existing_statuses.get(row.get("id")) in ("", None)
-            )
+            elif status == ORDER_STATUS_NEW and row.get("route_id") not in eligible_route_ids:
+                errors.append(f"{label}: маршрут, его операции и участки должны быть активны для нового или возвращённого в «Новый» заказа.")
+            unchanged_system_status = status == existing_statuses.get(row.get("id"))
             if status not in MANUAL_ORDER_STATUSES and not unchanged_system_status:
                 errors.append(f"{label}: поле status можно вручную задать только как Новый или Отменён.")
             mode = row.get("planning_mode", PLANNING_MODE_SHIPMENT)
@@ -107,7 +114,7 @@ class DraftCommitService:
             else:
                 errors.append(f"{label}: неизвестный режим планирования.")
             existing = existing_orders.get(row.get("id"))
-            if existing is not None and existing.status in ("", None) and status not in MANUAL_ORDER_STATUSES:
+            if existing is not None and existing.status not in MANUAL_ORDER_STATUSES and status != ORDER_STATUS_NEW:
                 protected_changed = any((
                     float(row.get("quantity") or 0) != float(existing.quantity),
                     row.get("route_id") != existing.route_id,
@@ -119,6 +126,79 @@ class DraftCommitService:
                 ))
                 if protected_changed:
                     errors.append(f"{label}: плановые параметры рассчитанного заказа можно менять только после установки статуса Новый.")
+        return errors
+
+    def _validate_work_centers(self, rows: list[dict[str, Any]]) -> list[str]:
+        existing = {item.name: item.id for item in __import__(
+            "app.repositories.work_centers_repository", fromlist=["WorkCentersRepository"]
+        ).WorkCentersRepository(self.session).list_work_centers()}
+        owners: dict[str, int | None] = dict(existing)
+        errors: list[str] = []
+        for index, row in enumerate(rows, 1):
+            label = f"Участки, строка {index}"
+            name = str(row.get("Название") or "").strip()
+            try:
+                hours = float(row.get("Доступное время в месяц"))
+            except (TypeError, ValueError):
+                hours = 0
+            if not name:
+                errors.append(f"{label}, поле «Название»: обязательное поле.")
+            elif name in owners and owners[name] != row.get("ID"):
+                errors.append(f"{label}, поле «Название»: название должно быть уникальным.")
+            else:
+                owners[name] = row.get("ID")
+            if hours <= 0:
+                errors.append(f"{label}, поле «Доступное время в месяц»: значение должно быть больше нуля.")
+            for field in ("Активен", "Нельзя прерывать заказ при планировании"):
+                if not isinstance(row.get(field), bool):
+                    errors.append(f"{label}, поле «{field}»: ожидается флаг да/нет.")
+        return errors
+
+    def _validate_routes(self, routes: list[dict[str, Any]], operations: list[dict[str, Any]]) -> list[str]:
+        existing_routes = {item.name: item.id for item in self.session.scalars(select(Route)).all()}
+        names: dict[str, int | None] = dict(existing_routes)
+        errors: list[str] = []
+        for index, row in enumerate(routes, 1):
+            label = f"Маршруты, строка {index}"
+            name = str(row.get("Название") or "").strip()
+            if not name:
+                errors.append(f"{label}, поле «Название»: обязательное поле.")
+            elif name in names and names[name] != row.get("ID"):
+                errors.append(f"{label}, поле «Название»: название должно быть уникальным.")
+            else:
+                names[name] = row.get("ID")
+            if not isinstance(row.get("Активен"), bool):
+                errors.append(f"{label}, поле «Активен»: ожидается флаг да/нет.")
+
+        active_centers = {item.name for item in __import__(
+            "app.repositories.work_centers_repository", fromlist=["WorkCentersRepository"]
+        ).WorkCentersRepository(self.session).list_work_centers() if item.is_active}
+        seen_numbers: dict[tuple[int, int], int] = {}
+        for index, row in enumerate(operations, 1):
+            label = f"Операции, строка {index}"
+            try:
+                route_id, number = int(row.get("_route_id")), int(row.get("№"))
+            except (TypeError, ValueError):
+                route_id, number = 0, 0
+            key = (route_id, number)
+            if number <= 0:
+                errors.append(f"{label}, поле «№»: номер должен быть положительным целым числом.")
+            elif key in seen_numbers:
+                errors.append(f"{label}, поле «№»: номер должен быть уникальным внутри маршрута.")
+            else:
+                seen_numbers[key] = index
+            if row.get("Участок") not in active_centers:
+                errors.append(f"{label}, поле «Участок»: выберите активный участок.")
+            for field, allow_zero in (("Трудоёмкость на 1000", False), ("Мин. передаточная партия", True)):
+                try:
+                    value = float(row.get(field))
+                except (TypeError, ValueError):
+                    value = -1
+                if value < 0 or (not allow_zero and value == 0):
+                    reason = "неотрицательным" if allow_zero else "больше нуля"
+                    errors.append(f"{label}, поле «{field}»: значение должно быть {reason}.")
+            if not isinstance(row.get("Активна"), bool):
+                errors.append(f"{label}, поле «Активна»: ожидается флаг да/нет.")
         return errors
 
     def _apply_work_centers(self, draft: DraftBundle) -> None:
