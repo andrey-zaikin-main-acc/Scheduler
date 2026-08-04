@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+from copy import deepcopy
 from uuid import uuid4
 
 
@@ -53,3 +54,57 @@ class DraftHistory:
 
     def clear(self) -> None:
         self.undo_stack.clear(); self.redo_stack.clear()
+
+
+HISTORY_SESSION_KEY = "draft_history"
+
+
+def session_history(state: Any) -> DraftHistory:
+    """Return the one history shared by every editable screen in a session."""
+    if HISTORY_SESSION_KEY not in state:
+        state[HISTORY_SESSION_KEY] = DraftHistory()
+    return state[HISTORY_SESSION_KEY]
+
+
+def apply_action(state: Any, action: DraftAction, *, undo: bool) -> None:
+    """Apply an action snapshot to its production draft in ``session_state``.
+
+    ``focus`` may override the conventional key for per-route operation drafts
+    and carries pending-delete snapshots for order deletion actions.
+    """
+    value = deepcopy(action.before if undo else action.after)
+    key = action.focus.get("session_key") or {
+        "orders": "orders_draft_rows",
+        "routes": "routes_draft_rows",
+        "operations": "route_operations_drafts_by_route_id",
+        "work_centers": "work_centers_draft_rows",
+    }.get(action.section)
+    if key:
+        if action.section == "operations" and action.route_id is not None and isinstance(value, list):
+            drafts = state.setdefault(key, {})
+            drafts[action.route_id] = value
+        else:
+            state[key] = value
+    pending_key = action.focus.get("pending_delete_key")
+    if pending_key:
+        state[pending_key] = set(action.focus["pending_delete_before" if undo else "pending_delete_after"])
+    state["draft_visual_event"] = {
+        "animation": "restore" if undo and action.action_type == "delete" else ("remove" if action.action_type == "delete" else "cell-change"),
+        "rows": action.rows,
+        "fields": action.fields,
+        "focus": action.focus,
+    }
+
+
+def undo_session(state: Any) -> DraftAction | None:
+    action = session_history(state).undo()
+    if action:
+        apply_action(state, action, undo=True)
+    return action
+
+
+def redo_session(state: Any) -> DraftAction | None:
+    action = session_history(state).redo()
+    if action:
+        apply_action(state, action, undo=False)
+    return action

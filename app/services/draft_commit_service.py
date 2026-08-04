@@ -87,13 +87,37 @@ class DraftCommitService:
             errors.extend(self._validate_routes(draft.routes, draft.operations))
         if "orders" not in sections:
             return errors
-        route_ids = set(self.session.scalars(select(Route.id)).all())
+        persisted_routes = list(self.session.scalars(select(Route)).all())
+        route_ids = {route.id for route in persisted_routes}
+        # Global validation observes one virtual final model rather than a mix
+        # of draft orders and persisted reference data.
+        center_active = {item.name: item.is_active for item in __import__(
+            "app.repositories.work_centers_repository", fromlist=["WorkCentersRepository"]
+        ).WorkCentersRepository(self.session).list_work_centers()}
+        if "work_centers" in sections:
+            center_active.update({str(row.get("Название") or "").strip(): bool(row.get("Активен"))
+                                  for row in draft.work_centers})
+        route_active = {route.id: route.is_active for route in persisted_routes}
+        if "routes" in sections:
+            route_active.update({int(row["ID"]): bool(row.get("Активен")) for row in draft.routes
+                                 if isinstance(row.get("ID"), int) and row["ID"] > 0})
+        operations_by_route: dict[int, list[tuple[bool, str]]] = {
+            route.id: [(op.is_active, op.work_center.name if op.work_center else "") for op in route.operations]
+            for route in persisted_routes
+        }
+        if "routes" in sections:
+            drafted_route_ids = {int(row["_route_id"]) for row in draft.operations
+                                 if isinstance(row.get("_route_id"), int)}
+            for route_id in drafted_route_ids:
+                operations_by_route[route_id] = [
+                    (bool(row.get("Активна")), str(row.get("Участок") or ""))
+                    for row in draft.operations if row.get("_route_id") == route_id
+                ]
         eligible_route_ids = {
-            route.id for route in self.session.scalars(select(Route)).all()
-            if route.is_active and route.operations and all(
-                operation.is_active and operation.work_center and operation.work_center.is_active
-                for operation in route.operations
-            )
+            route_id for route_id in route_ids if route_active.get(route_id, False)
+            and operations_by_route.get(route_id)
+            and all(active and center_active.get(center, False)
+                    for active, center in operations_by_route[route_id])
         }
         existing_orders = {order.id: order for order in self.session.scalars(select(Order)).all()}
         existing_statuses = {
@@ -101,7 +125,9 @@ class DraftCommitService:
         }
         numbers: dict[str, int] = {}
         priorities: dict[int, int] = {}
-        for index, row in enumerate(draft.orders, 1):
+        final_order_rows = [row for row in draft.orders if not (
+            isinstance(row.get("id"), int) and row["id"] in draft.pending_delete_ids)]
+        for index, row in enumerate(final_order_rows, 1):
             label = f"Заказ, строка {index} (ID {row.get('id', 'новый')})"
             for field_name in ("order_number", "client_name", "product_name"):
                 if not str(row.get(field_name) or "").strip():
