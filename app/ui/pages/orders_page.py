@@ -22,6 +22,8 @@ from app.db.models import Order, RecalculationRun, Route, RouteOperation, WorkCe
 from app.repositories.orders_repository import OrdersRepository
 from app.services.route_capacity_service import RouteCapacityService
 from app.ui.components.tables import order_rows
+from app.ui.components.draft_table import draft_table
+from app.ui.components.draft_table import next_draft_id
 from app.ui.pages.page_utils import recalculate_after_save
 
 EDITOR_COLUMNS = [
@@ -79,7 +81,7 @@ def render_orders_page() -> None:
             st.session_state.orders_pending_delete_ids = set()
         rows = st.session_state.orders_draft_rows
         _sync_order_editor_state(rows)
-        edited = st.data_editor(rows, key=ORDER_EDITOR_KEY, use_container_width=True, hide_index=True,
+        edited = draft_table(rows, key=ORDER_EDITOR_KEY, use_container_width=True, hide_index=True,
             disabled=READ_ONLY_EDITOR_COLUMNS, column_order=EDITOR_COLUMNS, num_rows="fixed",
             column_config={
                 "Выбран": st.column_config.CheckboxColumn("Выбран"),
@@ -88,7 +90,7 @@ def render_orders_page() -> None:
                 "Режим планирования": st.column_config.SelectboxColumn("Режим планирования", options=list(PLANNING_MODES)),
                 "Заданная дата запуска": st.column_config.DateColumn("Заданная дата запуска", format="DD.MM.YYYY"),
                 "Заданная дата отгрузки": st.column_config.DateColumn("Заданная дата отгрузки", format="DD.MM.YYYY"),
-            }) if rows else []
+            }).rows if rows else []
         # Capture the current editor value on every rerun. Navigation deliberately
         # handles the recalculation button after this page has rendered.
         st.session_state.orders_draft_rows = edited
@@ -241,7 +243,7 @@ def _render_new_order_form(
 def _save_new_order_form(session, repository: OrdersRepository, state: dict[str, Any], route_by_name: dict[str, Route]) -> None:
     """Append form values to the screen draft without validation or DB writes."""
     rows = st.session_state.setdefault("orders_draft_rows", [])
-    next_id = min([int(row.get("ID")) for row in rows if isinstance(row.get("ID"), int) and row.get("ID") < 0] or [0]) - 1
+    next_id = next_draft_id(rows)
     quantities = [state.get("quantity")]
     numbers = [str(state.get("order_number") or "")]
     if state.get("split") and float(state.get("child_size") or 0) > 0:
@@ -250,7 +252,7 @@ def _save_new_order_form(session, repository: OrdersRepository, state: dict[str,
     priority = 1 + max([int(row.get("Приоритет")) for row in rows if row.get("Статус") != "Отменён" and isinstance(row.get("Приоритет"), int) and row.get("Приоритет") > 0] or [0])
     for sequence, (number, quantity) in enumerate(zip(numbers, quantities, strict=True), 1):
         rows.append({
-            "Выбран": False, "ID": next_id, "Приоритет": priority,
+            "Выбран": False, "ID": None, "_draft_id": next_id, "Приоритет": priority,
             "Номер": number, "Клиент": state.get("client_name", ""),
             "Продукция": state.get("product_name", ""), "Тираж": quantity,
             "Режим планирования": state.get("planning_mode"),
@@ -453,6 +455,7 @@ def build_order_editor_rows(
             {
                 "Выбран": False,
                 "ID": None,
+                "_draft_id": next_draft_id(rows),
                 "Приоритет": len(orders) + 1,
                 "Номер": "",
                 "Клиент": "",

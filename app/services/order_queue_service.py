@@ -78,24 +78,33 @@ def classify_order(order: OrderLike, planned_ids: set[int], conflict_ids: set[in
 def build_queue_snapshot(orders: Iterable[OrderLike], planned_ids: set[int], conflict_ids: set[int]) -> QueueSnapshot:
     """Build planned/new/conflicted queues, keeping linked groups contiguous."""
     classified = [(order, classify_order(order, planned_ids, conflict_ids)) for order in orders]
+    # Form linked blocks before choosing a queue.  A system-created group is an
+    # indivisible scheduling unit even when its members have different results
+    # from the previous run.
+    rank = {QueueKind.PLANNED: 0, QueueKind.NEW: 1, QueueKind.CONFLICTED: 2}
+    grouped: dict[str, list[tuple[OrderLike, QueueKind]]] = {}
+    blocks: list[tuple[QueueKind, int, int, list[OrderLike]]] = []
+    for order, kind in classified:
+        if kind == QueueKind.CANCELLED:
+            continue
+        if order.is_linked_child_group and order.child_group_key:
+            grouped.setdefault(order.child_group_key, []).append((order, kind))
+        else:
+            blocks.append((kind, positive_integer(order.priority) or 10**30, order.id, [order]))
+    for members_with_kind in grouped.values():
+        kind = min((kind for _, kind in members_with_kind), key=rank.__getitem__)
+        members = [order for order, _ in members_with_kind]
+        members.sort(key=lambda item: (
+            item.child_sequence_number if item.child_sequence_number is not None else 10**30,
+            item.id,
+        ))
+        blocks.append((kind, min(positive_integer(item.priority) or 10**30 for item in members),
+                       min(item.id for item in members), members))
     result: list[OrderLike] = []
     kinds: list[QueueKind] = []
     for kind in (QueueKind.PLANNED, QueueKind.NEW, QueueKind.CONFLICTED):
-        queue = [order for order, current in classified if current == kind]
-        groups: dict[str, list[OrderLike]] = {}
-        singles: list[OrderLike] = []
-        for order in queue:
-            if order.is_linked_child_group and order.child_group_key:
-                groups.setdefault(order.child_group_key, []).append(order)
-            else:
-                singles.append(order)
-        blocks: list[tuple[int, int, list[OrderLike]]] = []
-        for order in singles:
-            blocks.append((positive_integer(order.priority) or 10**30, order.id, [order]))
-        for members in groups.values():
-            members.sort(key=lambda item: (item.child_sequence_number if item.child_sequence_number is not None else 10**30, item.id))
-            blocks.append((min(positive_integer(item.priority) or 10**30 for item in members), min(item.id for item in members), members))
-        for _, _, members in sorted(blocks, key=lambda item: (item[0], item[1])):
+        for _, _, _, members in sorted((block for block in blocks if block[0] == kind),
+                                       key=lambda block: (block[1], block[2])):
             result.extend(members)
             kinds.extend([kind] * len(members))
     return QueueSnapshot(tuple(order.id for order in result), tuple(kinds))

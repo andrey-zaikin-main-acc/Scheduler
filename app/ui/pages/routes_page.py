@@ -9,6 +9,7 @@ from app.db.models import Route, RouteOperation, WorkCenter
 from app.repositories.routes_repository import RoutesRepository
 from app.repositories.work_centers_repository import WorkCentersRepository
 from app.ui.components.tables import route_operation_rows, route_rows
+from app.ui.components.draft_table import draft_table, new_draft_row
 from app.ui.pages.page_utils import recalculate_after_save
 
 ROUTE_COLUMNS = ["Выбран", "ID", "Название", "Описание", "Активен", "Операций"]
@@ -66,7 +67,7 @@ def render_routes_page() -> None:
         if not route_rows_data:
             st.info("Маршруты пока не заведены. Нажмите «Добавить маршрут».")
             return
-        edited_routes = st.data_editor(
+        edited_routes = draft_table(
             route_rows_data,
             key=ROUTE_EDITOR_KEY,
             use_container_width=True,
@@ -82,7 +83,7 @@ def render_routes_page() -> None:
                 "Активен": st.column_config.CheckboxColumn("Активен"),
                 "Операций": st.column_config.NumberColumn("Операций", disabled=True),
             },
-        )
+        ).rows
         edited_routes, selected_route_id, selection_changed = reconcile_single_selection(
             route_rows_data, edited_routes, previous_id=selected_route_id
         )
@@ -116,7 +117,13 @@ def _render_operations_table(
     add_col, delete_col = st.columns(2)
     with add_col:
         if st.button("Добавить операцию", use_container_width=True):
-            st.session_state[DRAFT_OPERATION_SESSION_KEY] = True
+            pending_routes = st.session_state.setdefault(DRAFT_OPERATION_SESSION_KEY, set())
+            # Backward-compatible cleanup for sessions created by the former
+            # global boolean flag.
+            if not isinstance(pending_routes, set):
+                pending_routes = set()
+                st.session_state[DRAFT_OPERATION_SESSION_KEY] = pending_routes
+            pending_routes.add(route.id)
             st.rerun()
     with delete_col:
         if st.button(
@@ -131,12 +138,12 @@ def _render_operations_table(
     rows = drafts_by_route.get(route.id) or build_operation_editor_rows(
         route.operations,
         selected_id=selected_operation_id,
-        include_draft=bool(st.session_state.get(DRAFT_OPERATION_SESSION_KEY)),
+        include_draft=route.id in st.session_state.get(DRAFT_OPERATION_SESSION_KEY, set()),
     )
     if not rows:
         st.warning("У маршрута нет операций. Нажмите «Добавить операцию».")
         return
-    edited_rows = st.data_editor(
+    edited_rows = draft_table(
         rows,
         key=f"{OPERATION_EDITOR_KEY}_{route.id}",
         use_container_width=True,
@@ -160,7 +167,7 @@ def _render_operations_table(
                 "Мин. передаточная партия", min_value=0.0, step=100.0
             ),
         },
-    )
+    ).rows
     edited_rows, selected_operation_id, selection_changed = reconcile_single_selection(
         rows, edited_rows, previous_id=selected_operation_id
     )
@@ -194,14 +201,13 @@ def build_route_editor_rows(
     ]
     if include_draft:
         rows.append(
-            {
+            new_draft_row(rows, **{
                 "Выбран": False,
-                "ID": None,
                 "Название": "",
                 "Описание": "",
                 "Активен": True,
                 "Операций": 0,
-            }
+            })
         )
     return rows
 
@@ -215,15 +221,14 @@ def build_operation_editor_rows(
     ]
     if include_draft:
         rows.append(
-            {
+            new_draft_row(rows, **{
                 "Выбран": False,
-                "ID": None,
                 "№": (max([op.sequence_number for op in operations], default=0) + 1),
                 "Участок": None,
                 "Трудоёмкость на 1000": 0.0,
                 "Мин. передаточная партия": 0.0,
                 "Активна": True,
-            }
+            })
         )
     return rows
 

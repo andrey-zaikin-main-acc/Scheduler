@@ -9,6 +9,7 @@ from app.db.database import SessionLocal
 from app.db.models import WorkCenter
 from app.repositories.work_centers_repository import WorkCentersRepository
 from app.ui.components.tables import work_center_rows
+from app.ui.components.draft_table import draft_table, new_draft_row
 from app.ui.pages.page_utils import recalculate_after_save
 
 EDITOR_COLUMNS = [
@@ -36,13 +37,13 @@ def render_work_centers_page() -> None:
             st.session_state.work_centers_draft_rows = build_work_center_editor_rows(items, selected_id=None, include_draft=False)
         add_col, delete_col = st.columns(2)
         if add_col.button("Добавить участок"):
-            st.session_state.work_centers_draft_rows.append({"Выбран": False, "ID": None, "Название": "", "Доступное время в месяц": 0.0, "Активен": True, "Нельзя прерывать заказ при планировании": False})
+            st.session_state.work_centers_draft_rows.append(new_draft_row(st.session_state.work_centers_draft_rows, Выбран=False, Название="", **{"Доступное время в месяц": 0.0, "Активен": True, "Нельзя прерывать заказ при планировании": False}))
             st.rerun()
         selected = [row for row in st.session_state.work_centers_draft_rows if row.get("Выбран")]
         if delete_col.button("Удалить участок", disabled=not selected):
             st.warning("Участки не удаляются физически. Снимите флаг «Активен» и сохраните раздел.")
-        edited = st.data_editor(st.session_state.work_centers_draft_rows, key=EDITOR_KEY, hide_index=True,
-            disabled=["ID"], column_order=EDITOR_COLUMNS, num_rows="fixed")
+        edited = draft_table(st.session_state.work_centers_draft_rows, key=EDITOR_KEY, hide_index=True,
+            read_only=["ID"], column_order=EDITOR_COLUMNS, num_rows="fixed").rows
         st.session_state.work_centers_draft_rows = edited
         if st.button("Сохранить изменения", use_container_width=True):
             from app.ui.pages.page_utils import commit_all_session_drafts
@@ -58,14 +59,13 @@ def build_work_center_editor_rows(
     ]
     if include_draft:
         rows.append(
-            {
+            new_draft_row(rows, **{
                 "Выбран": False,
-                "ID": None,
                 "Название": "",
                 "Доступное время в месяц": 0.0,
                 "Активен": True,
                 "Нельзя прерывать заказ при планировании": False,
-            }
+            })
         )
     return rows
 

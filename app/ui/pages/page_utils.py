@@ -46,6 +46,12 @@ def commit_all_session_drafts(*, sections: set[str] | None = None, message_targe
         else:
             result = service.commit_and_recalculate(bundle, sections=selected_sections)
         if result.ok:
+            from app.services.draft_history_service import session_history
+            history = session_history(st.session_state)
+            for section in selected_sections:
+                history.clear_section(section)
+                if section == "routes":
+                    history.clear_section("operations")
             # Clear before rerun: Streamlit aborts execution at st.rerun().
             section_keys = {
                 "orders": {"orders_draft_rows", "orders_page_editor", "orders_page_editor_signature",
