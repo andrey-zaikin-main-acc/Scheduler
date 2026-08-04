@@ -148,16 +148,8 @@ class OrdersRepository:
         order.child_sequence_number = child_sequence_number
         order.is_child_order = is_child_order
         order.is_linked_child_group = is_linked_child_group
-        if priority is not None and priority != order.priority:
-            self.move_order(order.id, priority)
-        if planning_inputs_changed:
-            order.calculated_start_date = None
-            order.calculated_shipment_date = None
-        if status == ORDER_STATUS_CANCELLED:
-            order.calculated_start_date = None
-            order.calculated_shipment_date = None
-            order.priority = 0
-            self._clear_order_conflicts(order_id)
+        if priority is not None:
+            order.priority = priority
         self.session.flush()
         return order
 
@@ -204,52 +196,4 @@ class OrdersRepository:
         )
         self.session.delete(order)
         self.session.flush()
-        self.normalize_priorities()
         return True
-
-    def move_order(self, order_id: int, new_priority: int) -> None:
-        """Move one order or its linked child block and close all priority gaps."""
-        orders = [order for order in self.list_orders() if order.status == ORDER_STATUS_NEW]
-        moving = self.get_order(order_id)
-        if moving is None or not orders:
-            return
-        if moving.is_linked_child_group and moving.child_group_key:
-            block = [
-                order for order in orders
-                if order.is_linked_child_group
-                and order.child_group_key == moving.child_group_key
-            ]
-            block.sort(key=lambda order: (order.child_sequence_number or 0, order.id))
-        else:
-            block = [moving]
-        remaining = [order for order in orders if order not in block]
-        insertion = max(0, min(int(new_priority) - 1, len(remaining)))
-        ordered = remaining[:insertion] + block + remaining[insertion:]
-        for priority, order in enumerate(ordered, start=1):
-            order.priority = priority
-        self.session.flush()
-
-    def normalize_priorities(self) -> None:
-        """Persist one unique continuous sequence while preserving linked blocks."""
-        orders = [order for order in self.list_orders() if order.status == ORDER_STATUS_NEW]
-        emitted_groups: set[str] = set()
-        normalized: list[Order] = []
-        for order in orders:
-            if order.is_linked_child_group and order.child_group_key:
-                if order.child_group_key in emitted_groups:
-                    continue
-                emitted_groups.add(order.child_group_key)
-                children = [
-                    child for child in orders
-                    if child.is_linked_child_group
-                    and child.child_group_key == order.child_group_key
-                ]
-                normalized.extend(sorted(children, key=lambda child: (child.child_sequence_number or 0, child.id)))
-            else:
-                normalized.append(order)
-        for priority, order in enumerate(normalized, start=1):
-            order.priority = priority
-        for order in self.list_orders():
-            if order.status != ORDER_STATUS_NEW:
-                order.priority = 0
-        self.session.flush()

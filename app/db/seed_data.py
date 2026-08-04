@@ -335,9 +335,7 @@ def _seed_orders(session: Session, routes: dict[str, Route]) -> None:
             order.status = ORDER_STATUS_NEW
             order.calculated_start_date = None
     session.flush()
-    # Keep the user's relative order, append newly seeded rows, and repair any
-    # legacy zero/duplicate/gapped values before the first planning run.
-    OrdersRepository(session).normalize_priorities()
+    # Preserve existing priorities; newly seeded rows were appended above.
 
 
 def _seed_settings(session: Session) -> None:

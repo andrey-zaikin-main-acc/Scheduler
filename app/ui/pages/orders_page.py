@@ -54,7 +54,6 @@ READ_ONLY_EDITOR_COLUMNS = [
     "Запланирован",
     "Конфликт планирования",
     "Группа",
-    "Связанные заказы",
 ]
 
 
@@ -90,9 +89,6 @@ def render_orders_page() -> None:
                 "Заданная дата запуска": st.column_config.DateColumn("Заданная дата запуска", format="DD.MM.YYYY"),
                 "Заданная дата отгрузки": st.column_config.DateColumn("Заданная дата отгрузки", format="DD.MM.YYYY"),
             }) if rows else []
-        edited = reconcile_priority_move(rows, edited)
-        edited = normalize_scheduling_cells(rows, edited)
-        edited = protect_calculated_order_fields(rows, edited)
         # Capture the current editor value on every rerun. Navigation deliberately
         # handles the recalculation button after this page has rendered.
         st.session_state.orders_draft_rows = edited
@@ -251,7 +247,7 @@ def _save_new_order_form(session, repository: OrdersRepository, state: dict[str,
     if state.get("split") and float(state.get("child_size") or 0) > 0:
         quantities = _split_child_quantities(float(state.get("quantity") or 0), float(state["child_size"]))
         numbers = [f"{state.get('order_number')}.{i}" for i in range(1, len(quantities) + 1)]
-    priority = 1 + sum(row.get("Статус") == ORDER_STATUS_NEW for row in rows)
+    priority = 1 + max([int(row.get("Приоритет")) for row in rows if row.get("Статус") != "Отменён" and isinstance(row.get("Приоритет"), int) and row.get("Приоритет") > 0] or [0])
     for sequence, (number, quantity) in enumerate(zip(numbers, quantities, strict=True), 1):
         rows.append({
             "Выбран": False, "ID": next_id, "Приоритет": priority,

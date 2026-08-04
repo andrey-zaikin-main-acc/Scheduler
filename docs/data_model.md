@@ -172,3 +172,11 @@
 ## Model migration (session-draft release)
 
 `orders.calculated_shipment_date` separates planner output from the requested `shipment_date`; start-driven legacy results are recovered from the last saved operation. A blank persisted status represents system-owned planning outcome while `Новый`/`Отменён` remain manual values. `route_operations.is_active` is a non-null boolean with `DEFAULT 1`. `plan_changes.operation_sequence_number` is a stable history key independent of recreated planned-operation IDs. Migrations use column inspection and are idempotent; legacy columns such as `workday_start_time` remain for compatibility but are not editable.
+
+## Модель экранного сохранения (актуальная)
+
+Все правки сначала являются экранным черновиком. Локальное сохранение справочника не пересчитывает план; глобальная команда проверяет все разделы и pending delete до единой транзакции. Ошибка заполнения сохраняет черновик и историю, конфликт планирования является успешным системным результатом.
+
+Полный проход использует неизменяемый snapshot трёх очередей: ранее запланированные, новые, ранее конфликтные. Приоритет — глобально уникальное положительное целое; связанные строки одной группы занимают непрерывный блок. Оба заданных поля даты разрешены в черновике, а неиспользуемое поле очищается только после успешного расчёта. Системный результат читается из planned operations либо planning conflicts.
+
+Таблицы блокируют только фиксированные системные столбцы; в заказах это ID, группа, две расчётные даты и два флага результата. «Связанные заказы» редактируется. История undo/redo, отдельные черновики операций по route ID и навигационное подтверждение живут в сессии. Свободные слоты обязаны использовать неперсистентную симуляцию основного PlanningEngine. Статические ресурсы табличного адаптера должны включаться в Windows EXE и не зависеть от CDN.

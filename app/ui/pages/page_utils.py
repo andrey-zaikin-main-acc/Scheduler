@@ -31,22 +31,27 @@ def commit_all_session_drafts(*, sections: set[str] | None = None, message_targe
         routes = list(session.scalars(select(Route)).all())
         route_by_name = {route.name: route for route in routes}
         rows = st.session_state.get("orders_draft_rows", [])
+        operations_by_route = st.session_state.get("route_operations_drafts_by_route_id", {})
         bundle = DraftBundle(
             orders=[_editor_row_to_draft(row, route_by_name) for row in rows],
             pending_delete_ids=set(st.session_state.get("orders_pending_delete_ids", set())),
             routes=list(st.session_state.get("routes_draft_rows", [])),
-            operations=list(st.session_state.get("route_operations_draft_rows", [])),
+            operations=[row for rows_for_route in operations_by_route.values() for row in rows_for_route],
             work_centers=list(st.session_state.get("work_centers_draft_rows", [])),
         )
         selected_sections = sections or {"orders", "routes", "work_centers"}
-        result = DraftCommitService(session).commit(bundle, sections=selected_sections)
+        service = DraftCommitService(session)
+        if len(selected_sections) == 1 and not selected_sections.intersection({"orders"}):
+            result = service.save_reference_section(bundle, next(iter(selected_sections)))
+        else:
+            result = service.commit_and_recalculate(bundle, sections=selected_sections)
         if result.ok:
             # Clear before rerun: Streamlit aborts execution at st.rerun().
             section_keys = {
                 "orders": {"orders_draft_rows", "orders_page_editor", "orders_page_editor_signature",
                            "orders_route_capacity_result", "orders_route_capacity_slots",
                            "orders_page_show_new_order_form", "orders_page_selected_order_id"},
-                "routes": {"routes_draft_rows", "route_operations_draft_rows", "routes_page_route_editor",
+                "routes": {"routes_draft_rows", "route_operations_drafts_by_route_id", "routes_page_route_editor",
                            "routes_page_has_draft_route", "routes_page_has_draft_operation",
                            "routes_page_selected_route_id", "routes_page_selected_operation_id"},
                 "work_centers": {"work_centers_draft_rows", "work_centers_page_editor",
@@ -59,7 +64,7 @@ def commit_all_session_drafts(*, sections: set[str] | None = None, message_targe
                     st.session_state.pop(key, None)
             if "orders" in selected_sections:
                 st.session_state["orders_pending_delete_ids"] = set()
-            st.session_state["draft_flash"] = success_flash(result.summary)
+            st.session_state["draft_flash"] = (success_flash(result.summary) if result.summary else "Изменения сохранены без пересчёта плана.")
             st.rerun()
             return True
         target = message_target or st.sidebar

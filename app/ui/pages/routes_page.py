@@ -44,7 +44,7 @@ def render_routes_page() -> None:
         routes = list(routes_repository.list_routes_with_operations())
         selected_route_id = _normalize_selected_route(routes)
 
-        save_section = st.button("Сохранить изменения раздела и пересчитать план", use_container_width=True)
+        save_section = st.button("Сохранить изменения", use_container_width=True)
 
         add_col, delete_col = st.columns(2)
         with add_col:
@@ -127,7 +127,8 @@ def _render_operations_table(
             st.warning("Операции не удаляются физически. Снимите флаг «Активна» и сохраните раздел.")
 
     work_center_by_name = {item.name: item for item in work_centers if item.is_active}
-    rows = st.session_state.get("route_operations_draft_rows") or build_operation_editor_rows(
+    drafts_by_route = st.session_state.setdefault("route_operations_drafts_by_route_id", {})
+    rows = drafts_by_route.get(route.id) or build_operation_editor_rows(
         route.operations,
         selected_id=selected_operation_id,
         include_draft=bool(st.session_state.get(DRAFT_OPERATION_SESSION_KEY)),
@@ -165,7 +166,7 @@ def _render_operations_table(
     )
     for row in edited_rows:
         row["_route_id"] = route.id
-    st.session_state["route_operations_draft_rows"] = edited_rows
+    drafts_by_route[route.id] = edited_rows
     if selection_changed:
         st.session_state[SELECTED_OPERATION_SESSION_KEY] = selected_operation_id
         st.rerun()
