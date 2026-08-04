@@ -39,13 +39,9 @@ def render_navigation() -> None:
     initialize_database()
     st.title("Production Planner MVP")
     st.caption("Локальный прототип планирования производства с SQLite")
-    history = session_history(st.session_state)
-    if st.sidebar.button("Назад", disabled=not history.undo_stack):
-        undo_session(st.session_state); st.rerun()
-    if st.sidebar.button("Вперёд", disabled=not history.redo_stack):
-        redo_session(st.session_state); st.rerun()
     current = st.session_state.setdefault("current_page", PAGES[0])
-    requested = st.sidebar.radio("Раздел", PAGES)
+    st.session_state.setdefault("navigation_page", current)
+    requested = st.sidebar.radio("Раздел", PAGES, key="navigation_page")
     dirty = bool(st.session_state.get("routes_draft_rows") or st.session_state.get("route_operations_drafts_by_route_id")) if current == "Маршруты" else bool(st.session_state.get("work_centers_draft_rows"))
     page = request_navigation(st.session_state, requested, dirty=dirty)
     if st.session_state.get("pending_navigation"):
@@ -82,6 +78,29 @@ def render_navigation() -> None:
     elif page == "Результаты пересчёта":
         render_recalculation_results_page()
 
+    # The page must first capture data_editor's value and record its action.
+    render_history_controls()
     # Process save/recalculation only after the active page captured the latest
     # widget value into its screen draft.
     render_bootstrap_controls()
+
+
+def render_history_controls() -> None:
+    """Render the sole undo/redo controls against the up-to-date history."""
+    if st.session_state.get("draft_history_replay_in_progress"):
+        # The target can legitimately be an empty table after redo-delete, in
+        # which case no draft_table instance exists to consume the event.
+        event = st.session_state.pop("draft_visual_event", {})
+        if event.get("animation") == "remove":
+            st.info("Выбранные строки удалены из черновика.")
+        st.session_state.pop("draft_history_replay_editor_key", None)
+        st.session_state["draft_history_replay_in_progress"] = False
+    history = session_history(st.session_state)
+    st.sidebar.button(
+        "Назад", key="draft_history_undo", disabled=not history.undo_stack,
+        on_click=undo_session, args=(st.session_state,),
+    )
+    st.sidebar.button(
+        "Вперёд", key="draft_history_redo", disabled=not history.redo_stack,
+        on_click=redo_session, args=(st.session_state,),
+    )

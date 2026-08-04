@@ -88,24 +88,60 @@ def apply_action(state: Any, action: DraftAction, *, undo: bool) -> None:
     pending_key = action.focus.get("pending_delete_key")
     if pending_key:
         state[pending_key] = set(action.focus["pending_delete_before" if undo else "pending_delete_after"])
+    editor_key = {
+        "orders": "orders_page_editor",
+        "routes": "routes_page_route_editor",
+        "operations": (f"routes_page_operation_editor_{action.route_id}"
+                       if action.route_id is not None else None),
+        "work_centers": "work_centers_page_editor",
+    }.get(action.section)
+    if editor_key:
+        # A data_editor owns a copy of its input.  Snapshot replacement must
+        # invalidate that copy; ordinary editing deliberately never does.
+        state[f"{editor_key}_source_version"] = int(
+            state.get(f"{editor_key}_source_version", 0)
+        ) + 1
+        state["draft_history_replay_editor_key"] = editor_key
+    state["draft_history_replay_in_progress"] = True
     state["draft_visual_event"] = {
         "animation": "restore" if undo and action.action_type == "delete" else ("remove" if action.action_type == "delete" else "cell-change"),
+        "section": action.section,
+        "route_id": action.route_id,
         "rows": action.rows,
         "fields": action.fields,
         "focus": action.focus,
+        "before": deepcopy(action.before),
+        "after": deepcopy(action.after),
+        "undo": undo,
     }
-    if action.section == "orders":
-        # Undo/redo replaces the complete snapshot.  This is deliberately
-        # separate from draft value signatures so ordinary edits stay intact.
-        state["orders_page_editor_source_version"] = int(
-            state.get("orders_page_editor_source_version", 0)
-        ) + 1
+SECTION_PAGES = {
+    "orders": "Реестр заказов",
+    "routes": "Маршруты",
+    "operations": "Маршруты",
+    "work_centers": "Участки",
+}
+
+
+def navigate_to_action(state: Any, action: DraftAction) -> None:
+    """Synchronise every navigation model with the action being replayed."""
+    page = SECTION_PAGES[action.section]
+    state["current_page"] = page
+    state["navigation_page"] = page
+    state["requested_page"] = page
+    state["pending_navigation"] = False
+    if action.route_id is not None:
+        state["routes_page_selected_route_id"] = action.route_id
+    if action.section == "operations" and action.rows:
+        operation_id = next((row for row in action.rows if isinstance(row, int) and row > 0), None)
+        if operation_id is not None:
+            state["routes_page_selected_operation_id"] = operation_id
 
 
 def undo_session(state: Any) -> DraftAction | None:
     action = session_history(state).undo()
     if action:
         apply_action(state, action, undo=True)
+        navigate_to_action(state, action)
     return action
 
 
@@ -113,4 +149,5 @@ def redo_session(state: Any) -> DraftAction | None:
     action = session_history(state).redo()
     if action:
         apply_action(state, action, undo=False)
+        navigate_to_action(state, action)
     return action

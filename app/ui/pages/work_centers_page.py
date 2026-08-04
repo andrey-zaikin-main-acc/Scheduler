@@ -9,7 +9,8 @@ from app.db.database import SessionLocal
 from app.db.models import WorkCenter
 from app.repositories.work_centers_repository import WorkCentersRepository
 from app.ui.components.tables import work_center_rows
-from app.ui.components.draft_table import draft_table, new_draft_row
+from app.ui.components.draft_table import draft_table, new_draft_row, replace_table_source
+from app.services.draft_history_service import DraftAction, session_history
 from app.ui.pages.page_utils import recalculate_after_save
 
 EDITOR_COLUMNS = [
@@ -37,7 +38,16 @@ def render_work_centers_page() -> None:
             st.session_state.work_centers_draft_rows = build_work_center_editor_rows(items, selected_id=None, include_draft=False)
         add_col, delete_col = st.columns(2)
         if add_col.button("Добавить участок"):
-            st.session_state.work_centers_draft_rows.append(new_draft_row(st.session_state.work_centers_draft_rows, Выбран=False, Название="", **{"Доступное время в месяц": 0.0, "Активен": True, "Нельзя прерывать заказ при планировании": False}))
+            before = [dict(row) for row in st.session_state.work_centers_draft_rows]
+            row = new_draft_row(before, Выбран=False, Название="", **{"Доступное время в месяц": 0.0, "Активен": True, "Нельзя прерывать заказ при планировании": False})
+            st.session_state.work_centers_draft_rows = [*before, row]
+            session_history(st.session_state).record(DraftAction(
+                "work_centers", "add", before,
+                [dict(item) for item in st.session_state.work_centers_draft_rows],
+                (row["_draft_id"],), tuple(EDITOR_COLUMNS),
+                focus={"session_key": "work_centers_draft_rows"},
+            ))
+            replace_table_source(EDITOR_KEY)
             st.rerun()
         selected = [row for row in st.session_state.work_centers_draft_rows if row.get("Выбран")]
         if delete_col.button("Удалить участок", disabled=not selected):
