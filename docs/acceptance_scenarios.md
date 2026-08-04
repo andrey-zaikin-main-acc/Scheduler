@@ -80,3 +80,7 @@ free_hours × 1000 / labor_hours_per_1000
 3. Save an invalid draft: every row/field error is reported, no recalculation or write occurs, and the screen state remains.
 4. Save a valid draft: additions, changes, deletions, priority normalization and one recalculation receive one commit; an exception rolls all of them back.
 5. A section save validates only that directory and calculates strictly from committed data; drafts on other pages remain pending.
+
+## Сессионная приёмка
+
+Проверяются: ввод обеих заданных дат с сохранением при ошибке; полный успешный пересчёт с очисткой только игнорируемой даты; изменение рассчитанного заказа без перевода в «Новый»; повторная проверка конфликта; отмена до/после пересчёта; массовый pending delete с rollback; блок связанных заказов с приоритетами 2 и 10; undo/redo группового добавления партий; локальное сохранение справочника без пересчёта и навигационные варианты «Да»/«Нет». Поиск свободных слотов обязан использовать неперсистентную симуляцию основной механики PlanningEngine/CapacityCalendar и не менять БД.

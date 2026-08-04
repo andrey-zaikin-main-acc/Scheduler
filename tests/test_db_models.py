@@ -122,7 +122,7 @@ def test_order_move_shifts_priorities_and_delete_closes_gap(session: Session) ->
         (created[2].id, 1), (created[0].id, 2), (created[1].id, 3)
     ]
     repository.delete_order(created[0].id)
-    assert [order.priority for order in repository.list_orders()] == [1, 2]
+    assert [order.priority for order in repository.list_orders()] == [1, 3]
 
 
 def test_order_move_from_second_to_third_swaps_previous_third(session: Session) -> None:

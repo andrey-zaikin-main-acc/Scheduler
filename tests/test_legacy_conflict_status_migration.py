@@ -43,7 +43,7 @@ def test_migration_converts_legacy_conflict_status(monkeypatch) -> None:
         assert conflicts[0].order_id == order.id
 
 
-def test_priority_migration_initializes_by_id_and_is_idempotent(monkeypatch) -> None:
+def test_priority_migration_preserves_invalid_and_user_values(monkeypatch) -> None:
     engine = create_engine("sqlite:///:memory:")
     monkeypatch.setattr(database, "engine", engine)
     with engine.begin() as connection:
@@ -53,7 +53,7 @@ def test_priority_migration_initializes_by_id_and_is_idempotent(monkeypatch) -> 
     database._ensure_order_priority_column()
     with engine.begin() as connection:
         rows = connection.execute(text("SELECT id, priority FROM orders ORDER BY id")).all()
-        assert rows == [(2, 1), (7, 2), (9, 3)]
+        assert rows == [(2, 0), (7, 0), (9, 0)]
         connection.execute(text("UPDATE orders SET priority = 1 WHERE id = 9"))
         connection.execute(text("UPDATE orders SET priority = 2 WHERE id = 2"))
         connection.execute(text("UPDATE orders SET priority = 3 WHERE id = 7"))

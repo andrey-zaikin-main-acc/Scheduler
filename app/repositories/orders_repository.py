@@ -127,14 +127,6 @@ class OrdersRepository:
             return None
         original_status = order.status
         self._validate_manual_status(status, current_status=original_status)
-        planning_inputs_changed = (
-            float(order.quantity) != float(quantity)
-            or order.shipment_date != shipment_date
-            or order.route_id != route_id
-            or order.status != status
-            or order.planning_mode != planning_mode
-            or order.fixed_start_date != fixed_start_date
-        )
         order.order_number = order_number
         order.client_name = client_name
         order.product_name = product_name
@@ -148,16 +140,8 @@ class OrdersRepository:
         order.child_sequence_number = child_sequence_number
         order.is_child_order = is_child_order
         order.is_linked_child_group = is_linked_child_group
-        if priority is not None and priority != order.priority:
-            self.move_order(order.id, priority)
-        if planning_inputs_changed:
-            order.calculated_start_date = None
-            order.calculated_shipment_date = None
-        if status == ORDER_STATUS_CANCELLED:
-            order.calculated_start_date = None
-            order.calculated_shipment_date = None
-            order.priority = 0
-            self._clear_order_conflicts(order_id)
+        if priority is not None:
+            order.priority = priority
         self.session.flush()
         return order
 
@@ -204,7 +188,6 @@ class OrdersRepository:
         )
         self.session.delete(order)
         self.session.flush()
-        self.normalize_priorities()
         return True
 
     def move_order(self, order_id: int, new_priority: int) -> None:

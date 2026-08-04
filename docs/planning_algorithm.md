@@ -211,3 +211,7 @@ theoretical_route_quantity = floor(min(possible_quantity по операциям
 Before clearing the plan the service snapshots operation dates. Previously planned orders (except those manually returned to `Новый` or cancelled) are rebuilt first, ordered by their old first start and ID. New orders follow by continuous manual priority. Conflicted orders have blank system status and do not retry until explicitly marked `Новый`. Inactive routes, route operations, or work centers fail preparation with a specific conflict.
 
 `RecalculationService` flushes but never commits. The draft coordinator owns validation, mutations, recalculation, the single commit, and rollback. Start-mode output is written to `calculated_shipment_date`; shipment-mode output is written to `calculated_start_date`.
+
+## Полный проход
+
+После общей валидации создаётся неизменяемый snapshot: ранее запланированные по введённому приоритету, новые по приоритету, ранее конфликтные по приоритету. Отменённые исключаются. Связанный блок занимает позицию минимального приоритета участников, а внутри использует child_sequence_number и ID. Старые операции и конфликты заменяются в той же транзакции; каждый конфликт проверяется снова. Итог текущего заказа не меняет snapshot прохода. Успех и конфликт получают последовательный итоговый приоритет; отмена очищает системный результат, даты и отображаемый приоритет. Игнорируемая заданная дата и linked без группы нормализуются только после успешной общей проверки.

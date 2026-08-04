@@ -63,7 +63,7 @@ def test_recalculation_service_persists_successful_plan(session: Session) -> Non
         quantity=1000,
         shipment_date=date(2026, 7, 10),
         route_id=route.id,
-        status=ORDER_STATUS_NEW,
+        status=ORDER_STATUS_NEW, priority=1,
     )
     session.add(order)
     session.commit()
@@ -92,7 +92,7 @@ def test_recalculation_service_persists_conflict(session: Session) -> None:
         quantity=1000,
         shipment_date=date(2026, 7, 10),
         route_id=route.id,
-        status=ORDER_STATUS_NEW,
+        status=ORDER_STATUS_NEW, priority=1,
     )
     session.add(order)
     session.commit()
@@ -121,7 +121,7 @@ def test_recalculation_service_clears_previous_plan(session: Session) -> None:
         quantity=1000,
         shipment_date=date(2026, 7, 10),
         route_id=route.id,
-        status=ORDER_STATUS_NEW,
+        status=ORDER_STATUS_NEW, priority=1,
     )
     session.add(order)
     session.commit()
@@ -145,7 +145,7 @@ def test_recalculation_service_persists_plan_changes(session: Session) -> None:
         quantity=1000,
         shipment_date=date(2026, 7, 10),
         route_id=route.id,
-        status=ORDER_STATUS_NEW,
+        status=ORDER_STATUS_NEW, priority=1,
     )
     session.add(order)
     session.commit()
@@ -173,7 +173,7 @@ def test_recalculation_persists_high_capacity_order_within_shipment_date(
         quantity=1000,
         shipment_date=date(2026, 7, 10),
         route_id=route.id,
-        status=ORDER_STATUS_NEW,
+        status=ORDER_STATUS_NEW, priority=1,
     )
     session.add(order)
     session.commit()
@@ -202,7 +202,7 @@ def test_recalculation_recomputes_start_and_status_after_shipment_date_change(
         quantity=1000,
         shipment_date=date(2026, 7, 10),
         route_id=route.id,
-        status=ORDER_STATUS_NEW,
+        status=ORDER_STATUS_NEW, priority=1,
     )
     session.add(order)
     session.commit()
@@ -222,7 +222,7 @@ def test_recalculation_recomputes_start_and_status_after_shipment_date_change(
     assert last_day.end_datetime.date() <= order.shipment_date
 
 
-def test_order_update_clears_stale_calculated_start_date_before_recalculation(
+def test_order_update_preserves_system_result_until_recalculation(
     session: Session,
 ) -> None:
     route = create_route_with_operation(
@@ -249,11 +249,11 @@ def test_order_update_clears_stale_calculated_start_date_before_recalculation(
         quantity=1000,
         shipment_date=date(2026, 7, 1),
         route_id=route.id,
-        status=ORDER_STATUS_NEW,
+        status=ORDER_STATUS_NEW, priority=1,
     )
 
     assert updated is not None
-    assert updated.calculated_start_date is None
+    assert updated.calculated_start_date == date(2026, 7, 10)
 
     RecalculationService(
         session, planning_start_date=date(2026, 7, 1)
@@ -308,7 +308,7 @@ def test_conflicted_order_participates_again_and_can_become_planned(
         quantity=1000,
         shipment_date=date(2026, 7, 10),
         route_id=route.id,
-        status=ORDER_STATUS_NEW,
+        status=ORDER_STATUS_NEW, priority=1,
     )
     session.add(order)
     session.commit()
@@ -342,7 +342,7 @@ def test_start_driven_order_without_shipment_date_is_planned_from_fixed_date(
     order = Order(
         order_number="START-NO-DEADLINE", client_name="Клиент", product_name="Продукт",
         quantity=1000, shipment_date=None, fixed_start_date=date(2026, 7, 10),
-        planning_mode=PLANNING_MODE_START, route_id=route.id, status=ORDER_STATUS_NEW,
+        planning_mode=PLANNING_MODE_START, route_id=route.id, status=ORDER_STATUS_NEW, priority=1,
     )
     session.add(order)
     summary = RecalculationService(session, planning_start_date=date(2026, 7, 1)).recalculate_plan()
@@ -361,7 +361,7 @@ def test_start_driven_conflict_can_store_null_shipment_date(session: Session) ->
     order = Order(
         order_number="START-CONFLICT", client_name="Клиент", product_name="Продукт",
         quantity=1000, shipment_date=None, fixed_start_date=date(2026, 7, 10),
-        planning_mode=PLANNING_MODE_START, route_id=route.id, status=ORDER_STATUS_NEW,
+        planning_mode=PLANNING_MODE_START, route_id=route.id, status=ORDER_STATUS_NEW, priority=1,
     )
     session.add(order)
     summary = RecalculationService(session, planning_start_date=date(2026, 7, 1)).recalculate_plan()
@@ -379,7 +379,7 @@ def test_conflict_survives_two_consecutive_recalculations(session: Session) -> N
     order = Order(
         order_number="REPEAT-CONFLICT", client_name="Клиент", product_name="Продукт",
         quantity=1000, shipment_date=date(2026, 7, 10), route_id=route.id,
-        status=ORDER_STATUS_NEW,
+        status=ORDER_STATUS_NEW, priority=1,
     )
     session.add(order); session.flush()
     service = RecalculationService(session, planning_start_date=date(2026, 7, 1))
@@ -396,7 +396,7 @@ def test_previously_planned_order_stays_cancelled(session: Session) -> None:
     from app.constants import ORDER_STATUS_CANCELLED
     route = create_route_with_operation(session, hours_per_day=248, labor_hours_per_1000=8)
     order = Order(order_number="CANCEL-OLD", client_name="C", product_name="P", quantity=1000,
-                  shipment_date=date(2026, 7, 10), route_id=route.id, status=ORDER_STATUS_NEW)
+                  shipment_date=date(2026, 7, 10), route_id=route.id, status=ORDER_STATUS_NEW, priority=1)
     session.add(order)
     service = RecalculationService(session, planning_start_date=date(2026, 7, 1))
     service.recalculate_plan()

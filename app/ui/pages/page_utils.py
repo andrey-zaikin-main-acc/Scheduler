@@ -21,7 +21,7 @@ def recalculate_after_save(session: Session) -> None:
 
 
 def commit_all_session_drafts(*, sections: set[str] | None = None, message_target=None) -> bool:
-    """Atomically save the requested screen drafts and recalculate exactly once."""
+    """Save one reference locally, or atomically recalculate the global model."""
     from app.db.database import SessionLocal
     from app.db.models import Route
     from app.services.draft_commit_service import DraftBundle, DraftCommitService, success_flash
@@ -35,11 +35,17 @@ def commit_all_session_drafts(*, sections: set[str] | None = None, message_targe
             orders=[_editor_row_to_draft(row, route_by_name) for row in rows],
             pending_delete_ids=set(st.session_state.get("orders_pending_delete_ids", set())),
             routes=list(st.session_state.get("routes_draft_rows", [])),
-            operations=list(st.session_state.get("route_operations_draft_rows", [])),
+            operations=[row for route_rows in st.session_state.get(
+                "route_operations_drafts_by_route_id", {}
+            ).values() for row in route_rows] or list(st.session_state.get("route_operations_draft_rows", [])),
             work_centers=list(st.session_state.get("work_centers_draft_rows", [])),
         )
         selected_sections = sections or {"orders", "routes", "work_centers"}
-        result = DraftCommitService(session).commit(bundle, sections=selected_sections)
+        service = DraftCommitService(session)
+        if sections is not None and len(selected_sections) == 1 and "orders" not in selected_sections:
+            result = service.save_reference_section(bundle, next(iter(selected_sections)))
+        else:
+            result = service.commit_and_recalculate(bundle, sections=selected_sections)
         if result.ok:
             # Clear before rerun: Streamlit aborts execution at st.rerun().
             section_keys = {
@@ -59,7 +65,10 @@ def commit_all_session_drafts(*, sections: set[str] | None = None, message_targe
                     st.session_state.pop(key, None)
             if "orders" in selected_sections:
                 st.session_state["orders_pending_delete_ids"] = set()
-            st.session_state["draft_flash"] = success_flash(result.summary)
+            st.session_state["draft_flash"] = (
+                success_flash(result.summary) if result.summary
+                else "Изменения справочника сохранены без пересчёта плана."
+            )
             st.rerun()
             return True
         target = message_target or st.sidebar

@@ -44,6 +44,7 @@ from app.services.planning_mapper import (
     map_scheduled_operation_to_orm,
     map_work_center_to_planning,
 )
+from app.services.order_queue import build_queue_snapshot, validate_priorities
 
 
 @dataclass(frozen=True)
@@ -85,23 +86,18 @@ class RecalculationService:
             order_id: min(dates[0] for (oid, _), dates in previous_plan.items() if oid == order_id)
             for order_id in {key[0] for key in previous_plan}
         }
-        result_order_ids = set(previously_planned) | previously_conflicted
-        orphaned_system_orders = set(self.session.scalars(
-            select(Order.id).where(
-                or_(Order.status == "", Order.status.is_(None)),
-                ~Order.id.in_(result_order_ids),
-            )
-        ).all())
+        all_orders = list(self.session.scalars(select(Order).order_by(Order.id)).all())
+        validation_errors = validate_priorities(all_orders)
+        try:
+            queue_snapshot = build_queue_snapshot(all_orders, set(previously_planned), previously_conflicted)
+        except ValueError as exc:
+            validation_errors.append(str(exc))
+        if validation_errors:
+            raise ValueError("\n".join(validation_errors))
         self.plan_repository.clear_plan()
-        # A conflict is a protected system result.  Keep it until the user
-        # explicitly returns that order to «Новый», cancels it, or deletes it.
-        retry_conflicts = set(self.session.scalars(
-            select(Order.id).where(Order.id.in_(previously_conflicted), Order.status == ORDER_STATUS_NEW)
-        ).all())
-        if retry_conflicts:
-            self.session.query(PlanningConflictModel).filter(
-                PlanningConflictModel.order_id.in_(retry_conflicts)
-            ).delete(synchronize_session=False)
+        # Every system result is rebuilt in this transaction. Conflicts are
+        # successful planner outcomes, not protected validation errors.
+        self.session.query(PlanningConflictModel).delete(synchronize_session=False)
         # Cancellation wins even when the order existed in the previous plan.
         for cancelled in self.session.scalars(
             select(Order).where(Order.status == ORDER_STATUS_CANCELLED)
@@ -109,7 +105,7 @@ class RecalculationService:
             self.session.query(PlanningConflictModel).filter_by(
                 order_id=cancelled.id
             ).delete(synchronize_session=False)
-            cancelled.priority = 0
+            cancelled.priority = 0  # invalid sentinel rendered as an empty cell
             cancelled.calculated_start_date = None
             cancelled.calculated_shipment_date = None
 
@@ -124,25 +120,21 @@ class RecalculationService:
         )
 
         orders_by_id: dict[int, Order] = {}
-        # Repair priorities imported from legacy/corrupt databases before they
-        # become the planner's sole queue criterion.
-        self.orders_repository.normalize_priorities()
         prepared_orders, invalid_results = self._prepare_orders(
-            orders_by_id, set(previously_planned) | orphaned_system_orders,
-            previously_conflicted - retry_conflicts
+            orders_by_id, set(previously_planned), previously_conflicted
         )
-        # Saved plan is protected from newly entered priority: old planned work is
-        # rebuilt first in its previous chronological order.  A manual "Новый"
-        # status explicitly forfeits that protection.
-        protected = [p for p in prepared_orders if p.order.id in previously_planned and orders_by_id[p.order.id].status != ORDER_STATUS_NEW]
-        new = [p for p in prepared_orders if p not in protected]
-        sorted_orders = tuple(sorted(protected, key=lambda p: (previously_planned[p.order.id], p.order.id))) + sort_prepared_orders(new)
+        prepared_by_id = {item.order.id: item for item in prepared_orders}
+        sorted_orders = tuple(prepared_by_id[order_id] for order_id in queue_snapshot.order_ids if order_id in prepared_by_id)
 
         planned_order_count = 0
-        preserved_conflict_count = len(previously_conflicted - retry_conflicts)
-        conflicted_order_count = preserved_conflict_count
+        conflicted_order_count = 0
         planned_operation_count = 0
-        conflict_count = preserved_conflict_count
+        conflict_count = 0
+
+        # Persist the immutable processing order before results can change the
+        # classification. Linked blocks therefore receive adjacent priorities.
+        for priority, order_id in enumerate(queue_snapshot.order_ids, 1):
+            self.session.get(Order, order_id).priority = priority
 
         for invalid_result in invalid_results:
             self._persist_conflict_result(
@@ -209,7 +201,7 @@ class RecalculationService:
                 or_(
                     Order.status.in_(PLANNABLE_ORDER_STATUSES),
                     Order.id.in_(previously_planned_ids or set()),
-                    # Existing conflicts are deliberately not prepared again.
+                    Order.id.in_(previously_conflicted_ids or set()),
                 ),
                 Order.status != ORDER_STATUS_CANCELLED,
             )
@@ -330,7 +322,7 @@ class RecalculationService:
         self, result: PlannedOrderResult, order: Order
     ) -> None:
         order.status = ""
-        order.priority = 0
+        # Priority was normalized from the immutable queue snapshot.
         order.calculated_start_date = (
             None if order.planning_mode == PLANNING_MODE_START
             else result.calculated_start_date
@@ -342,6 +334,9 @@ class RecalculationService:
                 for operation in result.operations
                 for day in operation.days
             ).date()
+            order.shipment_date = None
+        elif order.planning_mode != PLANNING_MODE_START:
+            order.fixed_start_date = None
         for scheduled_operation in result.operations:
             planned_operation = map_scheduled_operation_to_orm(scheduled_operation)
             self.plan_repository.add_planned_operation(planned_operation)
@@ -359,9 +354,12 @@ class RecalculationService:
             order = self.orders_repository.get_order(result.order_id)
         if order is not None:
             order.status = ""
-            order.priority = 0
             order.calculated_start_date = None
             order.calculated_shipment_date = None
+            if order.planning_mode == PLANNING_MODE_START:
+                order.shipment_date = None
+            else:
+                order.fixed_start_date = None
         self.conflicts_repository.add_conflict(map_conflict_to_orm(result.conflict))
 
     def _current_plan_snapshot(self) -> dict[tuple[int, int], tuple[date, date]]:

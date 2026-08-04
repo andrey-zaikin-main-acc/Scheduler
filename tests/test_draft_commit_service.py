@@ -53,12 +53,12 @@ def test_planner_exception_rolls_back_all_draft_mutations():
 
 def test_unchanged_empty_system_status_is_valid_and_child_sequence_survives():
     s=make_session(); route=seed(s)
-    order=Order(priority=0, order_number='SYS', client_name='C', product_name='P', quantity=10,
+    order=Order(priority=1, order_number='SYS', client_name='C', product_name='P', quantity=10,
                 shipment_date=date(2026,8,1), route_id=route.id, status='',
                 child_group_key='G', child_sequence_number=2, is_child_order=True,
                 is_linked_child_group=True)
     s.add(order); s.commit()
-    row=valid_row(route.id) | {'id':order.id, 'order_number':'SYS', 'status':'', 'priority':0,
+    row=valid_row(route.id) | {'id':order.id, 'order_number':'SYS', 'status':'', 'priority':1,
                                'child_group_key':'G', 'child_sequence_number':2,
                                'is_child_order':True, 'is_linked_child_group':True}
     errors=DraftCommitService(s).validate(DraftBundle(orders=[row]), sections={'orders'})
@@ -67,7 +67,7 @@ def test_unchanged_empty_system_status_is_valid_and_child_sequence_survives():
     assert order.child_sequence_number == 2
 
 
-def test_priorities_are_applied_in_one_continuous_pass():
+def test_priorities_are_persisted_exactly_as_entered():
     s=make_session(); route=seed(s)
     rows=[]
     for index in range(1,4):
@@ -80,11 +80,11 @@ def test_priorities_are_applied_in_one_continuous_pass():
     ]
 
 
-def test_server_validation_rejects_date_incompatible_with_mode():
+def test_server_validation_allows_both_dates_in_draft():
     s=make_session(); route=seed(s)
     row=valid_row(route.id); row['fixed_start_date']=date(2026,7,1)
     errors=DraftCommitService(s).validate(DraftBundle(orders=[row]), sections={'orders'})
-    assert any('fixed_start_date должно быть пустым' in error for error in errors)
+    assert errors == []
 
 
 def test_local_route_validation_does_not_validate_order_draft():

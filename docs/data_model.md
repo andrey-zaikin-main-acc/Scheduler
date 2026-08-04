@@ -172,3 +172,7 @@
 ## Model migration (session-draft release)
 
 `orders.calculated_shipment_date` separates planner output from the requested `shipment_date`; start-driven legacy results are recovered from the last saved operation. A blank persisted status represents system-owned planning outcome while `Новый`/`Отменён` remain manual values. `route_operations.is_active` is a non-null boolean with `DEFAULT 1`. `plan_changes.operation_sequence_number` is a stable history key independent of recreated planned-operation IDs. Migrations use column inspection and are idempotent; legacy columns such as `workday_start_time` remain for compatibility but are not editable.
+
+## Источники истины и черновики
+
+Ручной `orders.status` хранит `Новый`, `Отменён` либо пустое значение после обработки. Системный успех определяется наличием `planned_operations`, конфликт — `planning_conflicts`; дублирующих boolean-полей нет. `priority=0` в старой SQLite является только невалидным sentinel и показывается пустым: миграция не исправляет значения. Экранные черновики, pending delete, history/redo и стабильные временные row ID существуют только в session_state; операции хранятся по route ID. Локальное сохранение справочника не меняет плановые таблицы.

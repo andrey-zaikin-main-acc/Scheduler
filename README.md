@@ -171,3 +171,9 @@ data/planner.sqlite3
 ## Session drafts and atomic planning
 
 Editable registries now use session-scoped screen drafts. Adding or pre-deleting a row does not touch SQLite. The global save action validates all participating rows, applies the draft and rebuilds the plan in one transaction; validation and technical errors preserve the draft. Route/work-center saves are explicit section actions. Manual order status is limited to **Новый** and **Отменён**; planning outcome is displayed independently.
+
+## Экранные черновики и пересчёт
+
+Редактируемые таблицы являются черновиками текущей Streamlit-сессии: изменение ячейки, добавление и отложенное удаление не пишут SQLite. Маршруты и участки сохраняются кнопкой «Сохранить изменения» без пересчёта. «Пересчитать план» проверяет все черновики и pending delete до записи, затем одной транзакцией сохраняет модель, удаляет отмеченные заказы и один раз полностью строит план.
+
+Приоритет каждого неотменённого заказа — уникальное положительное целое число. Полный проход фиксирует три очереди (ранее запланированные, новые, ранее конфликтные), объединяет отмеченных участников системной группы в непрерывный блок и после этого присваивает общей последовательности 1…N. Конфликты пересматриваются при каждом проходе. Ручной статус — «Новый», «Отменён» или пустой после обработки; системный результат выводится из плана либо конфликта.
