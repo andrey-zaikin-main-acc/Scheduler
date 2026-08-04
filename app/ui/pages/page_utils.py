@@ -54,7 +54,8 @@ def commit_all_session_drafts(*, sections: set[str] | None = None, message_targe
                     history.clear_section("operations")
             # Clear before rerun: Streamlit aborts execution at st.rerun().
             section_keys = {
-                "orders": {"orders_draft_rows", "orders_page_editor", "orders_page_editor_signature",
+                "orders": {"orders_draft_rows", "orders_page_editor", "orders_page_editor_source_version",
+                           "orders_page_editor_applied_version", "orders_page_editor_source_reason",
                            "orders_route_capacity_result", "orders_route_capacity_slots",
                            "orders_page_show_new_order_form", "orders_page_selected_order_id"},
                 "routes": {"routes_draft_rows", "route_operations_drafts_by_route_id", "routes_page_route_editor",

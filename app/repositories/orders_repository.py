@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import date
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.constants import (
     CALCULATED_ORDER_STATUSES,
@@ -29,10 +29,26 @@ class OrdersRepository:
         self.session = session
 
     def list_orders(self) -> Sequence[Order]:
-        """Return orders in their user-defined planning order."""
-        return self.session.scalars(
-            select(Order).order_by(Order.priority == 0, Order.priority, Order.id)
-        ).all()
+        """Return the persisted queue in the same order used by recalculation."""
+        orders = list(self.session.scalars(select(Order).options(
+            selectinload(Order.route), selectinload(Order.conflicts),
+            selectinload(Order.planned_operations)
+        )).all())
+        def queue_rank(order: Order) -> int:
+            if order.status == ORDER_STATUS_CANCELLED:
+                return 3
+            if order.planned_operations:
+                return 0
+            if order.status == ORDER_STATUS_NEW:
+                return 1
+            if order.conflicts:
+                return 2
+            return 1
+        return sorted(orders, key=lambda order: (
+            queue_rank(order), order.priority or 10**30,
+            order.child_group_key or f"~{order.id}",
+            order.child_sequence_number or 0, order.id,
+        ))
 
     def get_order(self, order_id: int) -> Order | None:
         """Return an order by internal ID."""

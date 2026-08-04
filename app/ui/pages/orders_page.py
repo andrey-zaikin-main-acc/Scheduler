@@ -24,7 +24,11 @@ from app.services.route_capacity_service import RouteCapacityService
 from app.ui.components.tables import order_rows
 from app.ui.components.draft_table import draft_table
 from app.ui.components.draft_table import next_draft_id
+# Kept as a compatibility symbol for downstream extensions; the production
+# orders page never invokes this legacy immediate-save helper.
 from app.ui.pages.page_utils import recalculate_after_save
+from app.services.draft_history_service import DraftAction, session_history
+from app.services.order_queue_service import positive_integer
 
 EDITOR_COLUMNS = [
     "Выбран",
@@ -69,9 +73,10 @@ def render_orders_page() -> None:
         all_routes = list(session.scalars(select(Route).options(selectinload(Route.operations)).order_by(Route.name)).all())
         routes = [route for route in all_routes if route.is_active and route.operations and all(op.is_active and op.work_center and op.work_center.is_active for op in route.operations)]
         route_by_name = {route.name: route for route in all_routes}
-        orders = list(session.scalars(select(Order).options(selectinload(Order.route), selectinload(Order.conflicts), selectinload(Order.planned_operations)).order_by(Order.id)).all())
+        # OrdersRepository is the single source of the persisted planning order.
+        orders = OrdersRepository(session).list_orders()
         _render_route_capacity_check(session, routes)
-        if st.button("Добавить заказ", disabled=not routes, key="show_add_order"):
+        if st.button("Новый заказ", disabled=not routes, key="show_add_order"):
             st.session_state[DRAFT_ORDER_SESSION_KEY] = True
         if st.session_state.get(DRAFT_ORDER_SESSION_KEY):
             _render_new_order_form(session, OrdersRepository(session), routes, route_by_name)
@@ -79,35 +84,49 @@ def render_orders_page() -> None:
         if "orders_draft_rows" not in st.session_state:
             st.session_state.orders_draft_rows = build_order_editor_rows(orders, selected_order_id=None, include_draft=False)
             st.session_state.orders_pending_delete_ids = set()
+            replace_order_editor_source("database-load")
         rows = st.session_state.orders_draft_rows
         _sync_order_editor_state(rows)
         edited = draft_table(rows, key=ORDER_EDITOR_KEY, use_container_width=True, hide_index=True,
             disabled=READ_ONLY_EDITOR_COLUMNS, column_order=EDITOR_COLUMNS, num_rows="fixed",
             column_config={
                 "Выбран": st.column_config.CheckboxColumn("Выбран"),
-                "Статус": st.column_config.SelectboxColumn("Статус", options=list(MANUAL_ORDER_STATUSES)),
-                "Маршрут": st.column_config.SelectboxColumn("Маршрут", options=[route.name for route in routes]),
+                "Статус": st.column_config.SelectboxColumn("Статус", options=["", *MANUAL_ORDER_STATUSES]),
+                "Маршрут": st.column_config.SelectboxColumn("Маршрут", options=list(dict.fromkeys(
+                    [route.name for route in routes] + [str(row.get("Маршрут")) for row in rows if row.get("Маршрут")]
+                ))),
                 "Режим планирования": st.column_config.SelectboxColumn("Режим планирования", options=list(PLANNING_MODES)),
                 "Заданная дата запуска": st.column_config.DateColumn("Заданная дата запуска", format="DD.MM.YYYY"),
                 "Заданная дата отгрузки": st.column_config.DateColumn("Заданная дата отгрузки", format="DD.MM.YYYY"),
             }).rows if rows else []
+        edited = reconcile_linked_groups(rows, edited)
         # Capture the current editor value on every rerun. Navigation deliberately
         # handles the recalculation button after this page has rendered.
         st.session_state.orders_draft_rows = edited
         selected = [row for row in edited if row.get("Выбран")]
         if st.button("Удалить выбранные заказы", disabled=not selected, use_container_width=True):
+            before = [dict(row) for row in edited]
             pending = st.session_state.orders_pending_delete_ids
+            pending_before = set(pending)
             for row in selected:
                 if isinstance(row.get("ID"), int) and row["ID"] > 0:
                     pending.add(row["ID"])
-            st.session_state.orders_draft_rows = [row for row in edited if not row.get("Выбран")]
+            after = [row for row in edited if not row.get("Выбран")]
+            st.session_state.orders_draft_rows = after
+            session_history(st.session_state).record(DraftAction(
+                "orders", "delete", before, after,
+                tuple(row.get("ID") or row.get("_draft_id") for row in selected), (),
+                focus={"session_key": "orders_draft_rows", "pending_delete_key": "orders_pending_delete_ids",
+                       "pending_delete_before": pending_before, "pending_delete_after": set(pending)},
+            ))
+            replace_order_editor_source("delete")
             st.rerun()
 
 
 def _editor_row_to_draft(row: dict[str, Any], route_by_name: dict[str, Route]) -> dict[str, Any]:
     route = route_by_name.get(row.get("Маршрут"))
     return {
-        "id": row.get("ID"), "priority": row.get("Приоритет"),
+        "id": row.get("ID"), "_draft_id": row.get("_draft_id"), "priority": row.get("Приоритет"),
         "order_number": row.get("Номер"), "client_name": row.get("Клиент"),
         "product_name": row.get("Продукция"), "quantity": row.get("Тираж"),
         "planning_mode": row.get("Режим планирования"),
@@ -222,34 +241,23 @@ def _render_new_order_form(
     if save_col.button("Добавить заказ", use_container_width=True, key="new_save"):
         _save_new_order_form(session, repository, state, route_by_name)
     if clear_col.button("Очистить поле", use_container_width=True, key="new_clear"):
-        st.session_state["orders_page_new_order_form"] = dict(NEW_ORDER_DEFAULTS)
-        for key in [
-            "new_order_number",
-            "new_client",
-            "new_product",
-            "new_quantity",
-            "new_route",
-            "new_mode",
-            "new_fixed_start",
-            "new_ship_date",
-            "new_split",
-            "new_child_size",
-            "new_linked",
-        ]:
-            st.session_state.pop(key, None)
+        _reset_new_order_form()
         st.rerun()
 
 
 def _save_new_order_form(session, repository: OrdersRepository, state: dict[str, Any], route_by_name: dict[str, Route]) -> None:
     """Append form values to the screen draft without validation or DB writes."""
     rows = st.session_state.setdefault("orders_draft_rows", [])
+    before = [dict(row) for row in rows]
     next_id = next_draft_id(rows)
     quantities = [state.get("quantity")]
     numbers = [str(state.get("order_number") or "")]
     if state.get("split") and float(state.get("child_size") or 0) > 0:
         quantities = _split_child_quantities(float(state.get("quantity") or 0), float(state["child_size"]))
         numbers = [f"{state.get('order_number')}.{i}" for i in range(1, len(quantities) + 1)]
-    priority = 1 + max([int(row.get("Приоритет")) for row in rows if row.get("Статус") != "Отменён" and isinstance(row.get("Приоритет"), int) and row.get("Приоритет") > 0] or [0])
+    priority = 1 + max([value for row in rows if row.get("Статус") != "Отменён"
+                        and (value := positive_integer(row.get("Приоритет"))) is not None] or [0])
+    added_ids: list[int] = []
     for sequence, (number, quantity) in enumerate(zip(numbers, quantities, strict=True), 1):
         rows.append({
             "Выбран": False, "ID": None, "_draft_id": next_id, "Приоритет": priority,
@@ -262,12 +270,28 @@ def _save_new_order_form(session, repository: OrdersRepository, state: dict[str,
             "Группа": str(state.get("order_number") or "") if len(numbers) > 1 else "",
             "_child_sequence_number": sequence if len(numbers) > 1 else None,
             "_is_child_order": len(numbers) > 1,
-            "Связанные заказы": bool(state.get("linked")), "Маршрут": state.get("route_name"),
+            "Связанные заказы": bool(state.get("linked")) if len(numbers) > 1 else False,
+            "Маршрут": state.get("route_name"),
             "Статус": ORDER_STATUS_NEW, "Запланирован": False, "Конфликт планирования": False,
         })
+        added_ids.append(next_id)
         next_id -= 1; priority += 1
+    session_history(st.session_state).record(DraftAction(
+        "orders", "add", before, [dict(row) for row in rows], tuple(added_ids), tuple(EDITOR_COLUMNS),
+        focus={"session_key": "orders_draft_rows"},
+    ))
+    _reset_new_order_form()
     st.session_state[DRAFT_ORDER_SESSION_KEY] = False
+    replace_order_editor_source("add")
     st.rerun()
+
+
+def _reset_new_order_form() -> None:
+    """Clear both the form model and Streamlit widget values after an add."""
+    st.session_state["orders_page_new_order_form"] = dict(NEW_ORDER_DEFAULTS)
+    for key in ("new_order_number", "new_client", "new_product", "new_quantity", "new_route",
+                "new_mode", "new_fixed_start", "new_ship_date", "new_split", "new_child_size", "new_linked"):
+        st.session_state.pop(key, None)
 
 
 def _split_child_quantities(total: float, size: float) -> list[float]:
@@ -284,15 +308,23 @@ def _split_child_quantities(total: float, size: float) -> list[float]:
     return quantities
 
 
-_ORDER_EDITOR_SIGNATURE_SESSION_KEY = "orders_page_editor_signature"
+_ORDER_EDITOR_SOURCE_VERSION_KEY = "orders_page_editor_source_version"
+_ORDER_EDITOR_APPLIED_VERSION_KEY = "orders_page_editor_applied_version"
+
+
+def replace_order_editor_source(reason: str) -> None:
+    """Mark an explicit snapshot replacement, never an ordinary cell edit."""
+    version = int(st.session_state.get(_ORDER_EDITOR_SOURCE_VERSION_KEY, 0)) + 1
+    st.session_state[_ORDER_EDITOR_SOURCE_VERSION_KEY] = version
+    st.session_state["orders_page_editor_source_reason"] = reason
 
 
 def _sync_order_editor_state(rows: list[dict[str, Any]]) -> None:
-    """Reset stale data-editor widget state when database-backed rows change."""
-    signature = _order_editor_rows_signature(rows)
-    if st.session_state.get(_ORDER_EDITOR_SIGNATURE_SESSION_KEY) != signature:
+    """Reset the widget only after an explicit replacement of its source."""
+    version = int(st.session_state.get(_ORDER_EDITOR_SOURCE_VERSION_KEY, 0))
+    if st.session_state.get(_ORDER_EDITOR_APPLIED_VERSION_KEY) != version:
         st.session_state.pop(ORDER_EDITOR_KEY, None)
-        st.session_state[_ORDER_EDITOR_SIGNATURE_SESSION_KEY] = signature
+        st.session_state[_ORDER_EDITOR_APPLIED_VERSION_KEY] = version
 
 
 def _order_editor_rows_signature(
@@ -301,6 +333,25 @@ def _order_editor_rows_signature(
     """Return a stable signature for persisted order data, excluding UI selection."""
     data_columns = [column for column in EDITOR_COLUMNS if column != "Выбран"]
     return tuple(tuple(row.get(column) for column in data_columns) for row in rows)
+
+
+def reconcile_linked_groups(previous: list[dict[str, Any]], edited: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Apply a linked checkbox change atomically to its system group."""
+    result = [dict(row) for row in edited]
+    old = {row.get("ID") or row.get("_draft_id"): row for row in previous}
+    changed_groups: dict[str, bool] = {}
+    for row in result:
+        group = str(row.get("Группа") or "")
+        key = row.get("ID") or row.get("_draft_id")
+        if not group:
+            row["Связанные заказы"] = False
+        elif bool(row.get("Связанные заказы")) != bool(old.get(key, {}).get("Связанные заказы")):
+            changed_groups[group] = bool(row.get("Связанные заказы"))
+    for row in result:
+        group = str(row.get("Группа") or "")
+        if group in changed_groups:
+            row["Связанные заказы"] = changed_groups[group]
+    return result
 
 
 def reconcile_priority_move(
@@ -784,7 +835,8 @@ def _clear_orders_page_state(*, close_form: bool = False) -> None:
     """Discard DB-dependent widget snapshots before the next Streamlit run."""
     _clear_route_capacity_cache()
     st.session_state.pop(ORDER_EDITOR_KEY, None)
-    st.session_state.pop(_ORDER_EDITOR_SIGNATURE_SESSION_KEY, None)
+    st.session_state.pop(_ORDER_EDITOR_APPLIED_VERSION_KEY, None)
+    replace_order_editor_source("discard")
     st.session_state[SELECTED_ORDER_SESSION_KEY] = None
     if close_form:
         st.session_state[DRAFT_ORDER_SESSION_KEY] = False

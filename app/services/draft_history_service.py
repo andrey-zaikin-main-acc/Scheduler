@@ -94,6 +94,12 @@ def apply_action(state: Any, action: DraftAction, *, undo: bool) -> None:
         "fields": action.fields,
         "focus": action.focus,
     }
+    if action.section == "orders":
+        # Undo/redo replaces the complete snapshot.  This is deliberately
+        # separate from draft value signatures so ordinary edits stay intact.
+        state["orders_page_editor_source_version"] = int(
+            state.get("orders_page_editor_source_version", 0)
+        ) + 1
 
 
 def undo_session(state: Any) -> DraftAction | None:
