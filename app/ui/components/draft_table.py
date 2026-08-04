@@ -6,6 +6,7 @@ focus and animate the affected row without invoking business logic.
 """
 
 from dataclasses import dataclass
+from numbers import Integral
 from typing import Any, Iterable
 from copy import deepcopy
 
@@ -30,12 +31,15 @@ class DraftTableResult:
 
 def stable_row_key(row: dict[str, Any]) -> object:
     """Use a persisted ID or a durable temporary ID, never the row index."""
-    value = row.get("ID") or row.get("id") or row.get("_draft_id")
+    # data_editor/pandas represents an empty numeric ID as NaN.  It is truthy,
+    # so an ``or`` chain would hide the valid negative draft ID behind it.
+    candidates = (row.get("ID"), row.get("id"), row.get("_draft_id"))
+    value = next((candidate for candidate in candidates
+                  if isinstance(candidate, Integral) and not isinstance(candidate, bool)
+                  and int(candidate) != 0), None)
     if value is None:
         raise ValueError("Draft table rows require ID or _draft_id")
-    if not isinstance(value, int) or isinstance(value, bool) or value == 0:
-        raise ValueError("Draft table row keys must be non-zero integers")
-    return value
+    return int(value)
 
 
 def next_draft_id(rows: Iterable[dict[str, Any]]) -> int:
@@ -48,6 +52,12 @@ def new_draft_row(rows: Iterable[dict[str, Any]], **values: Any) -> dict[str, An
     return {"_draft_id": next_draft_id(rows), **values}
 
 
+def replace_table_source(key: str) -> None:
+    """Invalidate a widget after a programmatic snapshot replacement."""
+    version_key = f"{key}_source_version"
+    st.session_state[version_key] = int(st.session_state.get(version_key, 0)) + 1
+
+
 def draft_table(rows: list[dict[str, Any]], *, key: str, read_only: list[str] | None = None,
                 selection_field: str = "Выбран", **kwargs: Any) -> DraftTableResult:
     """Render the editor and translate its protocol into semantic events.
@@ -55,9 +65,27 @@ def draft_table(rows: list[dict[str, Any]], *, key: str, read_only: list[str] | 
     Pages consume only rows and these events.  In particular, a selection
     checkbox is reported as ``selection`` and never as a business edit.
     """
+    postprocess = kwargs.pop("postprocess", None)
     disabled = read_only if read_only is not None else kwargs.pop("disabled", [])
+    source_version = int(st.session_state.get(f"{key}_source_version", 0))
+    applied_key = f"{key}_applied_source_version"
+    if st.session_state.get(applied_key) != source_version:
+        st.session_state.pop(key, None)
+        st.session_state[applied_key] = source_version
     edited = st.data_editor(rows, key=key, disabled=disabled, **kwargs)
     edited = [dict(row) for row in edited]
+    # Underscore-prefixed metadata is not part of data_editor's browser
+    # payload. Preserve the durable temporary key for these fixed-row tables.
+    if len(edited) == len(rows):
+        for original, current in zip(rows, edited, strict=True):
+            if isinstance(original.get("_draft_id"), Integral):
+                current["_draft_id"] = int(original["_draft_id"])
+            for identity_field in ("ID", "id"):
+                if (not isinstance(current.get(identity_field), Integral)
+                        and isinstance(original.get(identity_field), Integral)):
+                    current[identity_field] = int(original[identity_field])
+    if postprocess is not None:
+        edited = postprocess(rows, edited)
     before_by_key = {stable_row_key(row): row for row in rows}
     after_by_key = {stable_row_key(row): row for row in edited}
     events: list[TableEvent] = []
@@ -91,7 +119,7 @@ def draft_table(rows: list[dict[str, Any]], *, key: str, read_only: list[str] | 
     if result_events:
         st.session_state[f"{key}_visual_event"] = result_events[-1]
         business_events = [event for event in result_events if event.kind != "selection"]
-        if business_events:
+        if business_events and not st.session_state.get("draft_history_replay_in_progress"):
             from app.services.draft_history_service import DraftAction, session_history
             section = ("orders" if key.startswith("orders_page") else
                        "operations" if "operation_editor" in key else
@@ -104,10 +132,29 @@ def draft_table(rows: list[dict[str, Any]], *, key: str, read_only: list[str] | 
                     "route_operations_drafts_by_route_id" if section == "operations" else
                     f"{section}_draft_rows")},
             ))
-        # A visible, dependency-free animation cue; the widget remains native
-        # Streamlit and therefore works in the bundled pywebview application.
-        st.markdown("<style>@keyframes draftPulse{0%{background:#fff3bf}100%{background:transparent}}"
-                    ".draft-table-event{animation:draftPulse .8s ease-out}</style>"
-                    f"<div class='draft-table-event' aria-live='polite'>{result_events[-1].animation}</div>",
-                    unsafe_allow_html=True)
+    _render_replay_focus(key, edited)
     return DraftTableResult(edited, result_events)
+
+
+def _render_replay_focus(key: str, rows: list[dict[str, Any]]) -> None:
+    """Consume replay metadata and show the affected real rows/cells."""
+    if st.session_state.get("draft_history_replay_editor_key") != key:
+        return
+    event = st.session_state.pop("draft_visual_event", None) or {}
+    row_keys = set(event.get("rows", ()))
+    fields = list(event.get("fields", ()))
+    affected = [row for row in rows if stable_row_key(row) in row_keys]
+    if affected:
+        visible_fields = [field for field in fields if field in affected[0]]
+        columns = visible_fields or list(affected[0])
+        st.caption("Результат отмены" if event.get("undo") else "Результат повтора")
+        # This is the replay confirmation for the actual affected rows, rather
+        # than the former textual animation name.  Styler highlights cells.
+        import pandas as pd
+        frame = pd.DataFrame(affected)[columns]
+        st.dataframe(frame.style.map(lambda _: "background-color: #fff3bf"),
+                     use_container_width=True, hide_index=True)
+    elif event.get("animation") == "remove":
+        st.info("Выбранные строки удалены из черновика.")
+    st.session_state.pop("draft_history_replay_editor_key", None)
+    st.session_state["draft_history_replay_in_progress"] = False

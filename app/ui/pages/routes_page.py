@@ -9,7 +9,8 @@ from app.db.models import Route, RouteOperation, WorkCenter
 from app.repositories.routes_repository import RoutesRepository
 from app.repositories.work_centers_repository import WorkCentersRepository
 from app.ui.components.tables import route_operation_rows, route_rows
-from app.ui.components.draft_table import draft_table, new_draft_row
+from app.ui.components.draft_table import draft_table, new_draft_row, replace_table_source
+from app.services.draft_history_service import DraftAction, session_history
 from app.ui.pages.page_utils import recalculate_after_save
 
 ROUTE_COLUMNS = ["Выбран", "ID", "Название", "Описание", "Активен", "Операций"]
@@ -50,7 +51,17 @@ def render_routes_page() -> None:
         add_col, delete_col = st.columns(2)
         with add_col:
             if st.button("Добавить маршрут", use_container_width=True):
-                st.session_state[DRAFT_ROUTE_SESSION_KEY] = True
+                before = [dict(row) for row in (st.session_state.get("routes_draft_rows") or
+                          build_route_editor_rows(routes, selected_id=selected_route_id, include_draft=False))]
+                row = new_draft_row(before, **{"Выбран": False, "Название": "", "Описание": "",
+                                               "Активен": True, "Операций": 0})
+                after = [*before, row]
+                st.session_state["routes_draft_rows"] = after
+                session_history(st.session_state).record(DraftAction(
+                    "routes", "add", before, after, (row["_draft_id"],), tuple(ROUTE_COLUMNS),
+                    focus={"session_key": "routes_draft_rows"},
+                ))
+                replace_table_source(ROUTE_EDITOR_KEY)
                 st.rerun()
         with delete_col:
             if st.button(
@@ -124,6 +135,20 @@ def _render_operations_table(
                 pending_routes = set()
                 st.session_state[DRAFT_OPERATION_SESSION_KEY] = pending_routes
             pending_routes.add(route.id)
+            drafts = st.session_state.setdefault("route_operations_drafts_by_route_id", {})
+            before = [dict(row) for row in (drafts.get(route.id) or
+                      build_operation_editor_rows(route.operations, selected_id=selected_operation_id, include_draft=False))]
+            row = new_draft_row(before, **{"Выбран": False,
+                "№": max([op.sequence_number for op in route.operations], default=0) + 1,
+                "Участок": None, "Трудоёмкость на 1000": 0.0,
+                "Мин. передаточная партия": 0.0, "Активна": True, "_route_id": route.id})
+            after = [*before, row]
+            drafts[route.id] = after
+            session_history(st.session_state).record(DraftAction(
+                "operations", "add", before, after, (row["_draft_id"],), tuple(OPERATION_COLUMNS),
+                route_id=route.id, focus={"session_key": "route_operations_drafts_by_route_id"},
+            ))
+            replace_table_source(f"{OPERATION_EDITOR_KEY}_{route.id}")
             st.rerun()
     with delete_col:
         if st.button(

@@ -15,7 +15,7 @@ def test_navigation_exposes_plan_and_free_slots_pages(
 ) -> None:
     captured_options = []
 
-    def radio(label: str, options: list[str]) -> str:
+    def radio(label: str, options: list[str], **kwargs) -> str:
         captured_options.extend(options)
         return "Производственный план"
 

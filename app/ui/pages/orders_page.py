@@ -89,6 +89,7 @@ def render_orders_page() -> None:
         _sync_order_editor_state(rows)
         edited = draft_table(rows, key=ORDER_EDITOR_KEY, use_container_width=True, hide_index=True,
             disabled=READ_ONLY_EDITOR_COLUMNS, column_order=EDITOR_COLUMNS, num_rows="fixed",
+            postprocess=reconcile_linked_groups,
             column_config={
                 "Выбран": st.column_config.CheckboxColumn("Выбран"),
                 "Статус": st.column_config.SelectboxColumn("Статус", options=["", *MANUAL_ORDER_STATUSES]),
@@ -99,7 +100,6 @@ def render_orders_page() -> None:
                 "Заданная дата запуска": st.column_config.DateColumn("Заданная дата запуска", format="DD.MM.YYYY"),
                 "Заданная дата отгрузки": st.column_config.DateColumn("Заданная дата отгрузки", format="DD.MM.YYYY"),
             }).rows if rows else []
-        edited = reconcile_linked_groups(rows, edited)
         # Capture the current editor value on every rerun. Navigation deliberately
         # handles the recalculation button after this page has rendered.
         st.session_state.orders_draft_rows = edited
