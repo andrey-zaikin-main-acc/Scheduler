@@ -128,18 +128,20 @@ class DraftCommitService:
         final_order_rows = [row for row in draft.orders if not (
             isinstance(row.get("id"), int) and row["id"] in draft.pending_delete_ids)]
         for index, row in enumerate(final_order_rows, 1):
-            label = f"Заказ, строка {index} (ID {row.get('id', 'новый')})"
-            for field_name in ("order_number", "client_name", "product_name"):
+            identity = row.get('id') if row.get('id') is not None else row.get('_draft_id', 'временный')
+            number_label = str(row.get("order_number") or "без номера")
+            label = f"Заказы, строка {index} (ID {identity}, номер {number_label})"
+            for field_name, caption in (("order_number", "Номер"), ("client_name", "Клиент"), ("product_name", "Продукция")):
                 if not str(row.get(field_name) or "").strip():
-                    errors.append(f"{label}: поле {field_name} обязательно.")
+                    errors.append(f"{label}, поле «{caption}»: обязательное поле.")
             try:
                 if float(row.get("quantity")) <= 0:
                     raise ValueError
             except (TypeError, ValueError):
-                errors.append(f"{label}: поле quantity должно быть больше 0.")
+                errors.append(f"{label}, поле «Тираж»: значение должно быть больше 0.")
             number = str(row.get("order_number") or "").strip()
             if number in numbers:
-                errors.append(f"{label}: поле order_number дублирует строку {numbers[number]}.")
+                errors.append(f"{label}, поле «Номер»: значение дублирует строку {numbers[number]}.")
             numbers[number] = index
             status = row.get("status")
             if status != "Отменён":
@@ -152,7 +154,7 @@ class DraftCommitService:
                 else:
                     priorities[priority] = index
             if row.get("route_id") not in route_ids:
-                errors.append(f"{label}: поле route_id содержит неизвестный маршрут.")
+                errors.append(f"{label}, поле «Маршрут»: неизвестный маршрут.")
             elif status == ORDER_STATUS_NEW and row.get("route_id") not in eligible_route_ids:
                 errors.append(f"{label}: маршрут, его операции и участки должны быть активны для нового или возвращённого в «Новый» заказа.")
             unchanged_system_status = status == existing_statuses.get(row.get("id"))
@@ -161,10 +163,10 @@ class DraftCommitService:
             mode = row.get("planning_mode", PLANNING_MODE_SHIPMENT)
             if mode == PLANNING_MODE_START:
                 if not isinstance(row.get("fixed_start_date"), date):
-                    errors.append(f"{label}: поле fixed_start_date обязательно.")
+                    errors.append(f"{label}, поле «Заданная дата запуска»: обязательное поле.")
             elif mode == PLANNING_MODE_SHIPMENT:
                 if not isinstance(row.get("shipment_date"), date):
-                    errors.append(f"{label}: поле shipment_date обязательно.")
+                    errors.append(f"{label}, поле «Заданная дата отгрузки»: обязательное поле.")
             else:
                 errors.append(f"{label}: неизвестный режим планирования.")
         return errors
