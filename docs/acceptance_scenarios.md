@@ -80,3 +80,11 @@ free_hours × 1000 / labor_hours_per_1000
 3. Save an invalid draft: every row/field error is reported, no recalculation or write occurs, and the screen state remains.
 4. Save a valid draft: additions, changes, deletions, priority normalization and one recalculation receive one commit; an exception rolls all of them back.
 5. A section save validates only that directory and calculates strictly from committed data; drafts on other pages remain pending.
+
+## Модель экранного сохранения (актуальная)
+
+Все правки сначала являются экранным черновиком. Локальное сохранение справочника не пересчитывает план; глобальная команда проверяет все разделы и pending delete до единой транзакции. Ошибка заполнения сохраняет черновик и историю, конфликт планирования является успешным системным результатом.
+
+Полный проход использует неизменяемый snapshot трёх очередей: ранее запланированные, новые, ранее конфликтные. Приоритет — глобально уникальное положительное целое; связанные строки одной группы занимают непрерывный блок. Оба заданных поля даты разрешены в черновике, а неиспользуемое поле очищается только после успешного расчёта. Системный результат читается из planned operations либо planning conflicts.
+
+Таблицы блокируют только фиксированные системные столбцы; в заказах это ID, группа, две расчётные даты и два флага результата. «Связанные заказы» редактируется. История undo/redo, отдельные черновики операций по route ID и навигационное подтверждение живут в сессии. Свободные слоты обязаны использовать неперсистентную симуляцию основного PlanningEngine. Статические ресурсы табличного адаптера должны включаться в Windows EXE и не зависеть от CDN.

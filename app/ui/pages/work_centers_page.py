@@ -44,7 +44,7 @@ def render_work_centers_page() -> None:
         edited = st.data_editor(st.session_state.work_centers_draft_rows, key=EDITOR_KEY, hide_index=True,
             disabled=["ID"], column_order=EDITOR_COLUMNS, num_rows="fixed")
         st.session_state.work_centers_draft_rows = edited
-        if st.button("Сохранить изменения раздела и пересчитать план", use_container_width=True):
+        if st.button("Сохранить изменения", use_container_width=True):
             from app.ui.pages.page_utils import commit_all_session_drafts
             commit_all_session_drafts(sections={"work_centers"}, message_target=st)
 

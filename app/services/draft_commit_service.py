@@ -39,6 +39,10 @@ class DraftCommitService:
         self.recalculation_factory = recalculation_factory
 
     def commit(self, draft: DraftBundle, *, sections: set[str] | None = None) -> DraftCommitResult:
+        """Compatibility alias for the only global, recalculating operation."""
+        return self.commit_and_recalculate(draft, sections=sections)
+
+    def commit_and_recalculate(self, draft: DraftBundle, *, sections: set[str] | None = None) -> DraftCommitResult:
         sections = sections or {"orders", "routes", "work_centers"}
         errors = self.validate(draft, sections=sections)
         if errors:
@@ -53,6 +57,24 @@ class DraftCommitService:
             summary = self.recalculation_factory(self.session).recalculate_plan()
             self.session.commit()
             return DraftCommitResult(True, summary=summary)
+        except Exception as exc:
+            self.session.rollback()
+            return DraftCommitResult(False, (f"Техническая ошибка: {exc}",))
+
+    def save_reference_section(self, draft: DraftBundle, section: str) -> DraftCommitResult:
+        """Validate and save one reference section without touching the plan."""
+        if section not in {"routes", "work_centers"}:
+            return DraftCommitResult(False, ("Локально сохраняются только справочники.",))
+        errors = self.validate(draft, sections={section})
+        if errors:
+            return DraftCommitResult(False, tuple(errors))
+        try:
+            if section == "routes":
+                self._apply_routes(draft)
+            else:
+                self._apply_work_centers(draft)
+            self.session.commit()
+            return DraftCommitResult(True)
         except Exception as exc:
             self.session.rollback()
             return DraftCommitResult(False, (f"Техническая ошибка: {exc}",))
@@ -78,6 +100,7 @@ class DraftCommitService:
             order.id: order.status for order in self.session.scalars(select(Order)).all()
         }
         numbers: dict[str, int] = {}
+        priorities: dict[int, int] = {}
         for index, row in enumerate(draft.orders, 1):
             label = f"Заказ, строка {index} (ID {row.get('id', 'новый')})"
             for field_name in ("order_number", "client_name", "product_name"):
@@ -93,6 +116,15 @@ class DraftCommitService:
                 errors.append(f"{label}: поле order_number дублирует строку {numbers[number]}.")
             numbers[number] = index
             status = row.get("status")
+            if status != "Отменён":
+                from app.services.order_queue_service import positive_integer
+                priority = positive_integer(row.get("priority"))
+                if priority is None:
+                    errors.append(f"{label}, поле «Приоритет»: требуется положительное целое число.")
+                elif priority in priorities:
+                    errors.append(f"{label}, поле «Приоритет»: значение {priority} дублирует строку {priorities[priority]}.")
+                else:
+                    priorities[priority] = index
             if row.get("route_id") not in route_ids:
                 errors.append(f"{label}: поле route_id содержит неизвестный маршрут.")
             elif status == ORDER_STATUS_NEW and row.get("route_id") not in eligible_route_ids:
@@ -104,28 +136,11 @@ class DraftCommitService:
             if mode == PLANNING_MODE_START:
                 if not isinstance(row.get("fixed_start_date"), date):
                     errors.append(f"{label}: поле fixed_start_date обязательно.")
-                if row.get("shipment_date") is not None:
-                    errors.append(f"{label}: поле shipment_date должно быть пустым для режима от даты запуска.")
             elif mode == PLANNING_MODE_SHIPMENT:
                 if not isinstance(row.get("shipment_date"), date):
                     errors.append(f"{label}: поле shipment_date обязательно.")
-                if row.get("fixed_start_date") is not None:
-                    errors.append(f"{label}: поле fixed_start_date должно быть пустым для режима от даты отгрузки.")
             else:
                 errors.append(f"{label}: неизвестный режим планирования.")
-            existing = existing_orders.get(row.get("id"))
-            if existing is not None and existing.status not in MANUAL_ORDER_STATUSES and status != ORDER_STATUS_NEW:
-                protected_changed = any((
-                    float(row.get("quantity") or 0) != float(existing.quantity),
-                    row.get("route_id") != existing.route_id,
-                    mode != existing.planning_mode,
-                    row.get("fixed_start_date") != existing.fixed_start_date,
-                    row.get("shipment_date") != existing.shipment_date,
-                    (row.get("child_group_key") or None) != existing.child_group_key,
-                    bool(row.get("is_linked_child_group")) != existing.is_linked_child_group,
-                ))
-                if protected_changed:
-                    errors.append(f"{label}: плановые параметры рассчитанного заказа можно менять только после установки статуса Новый.")
         return errors
 
     def _validate_work_centers(self, rows: list[dict[str, Any]]) -> list[str]:
@@ -258,7 +273,6 @@ class DraftCommitService:
         for order_id in draft.pending_delete_ids:
             repository.delete_order(order_id)
         existing = {order.id: order for order in repository.list_orders()}
-        requested_priorities: dict[int, int] = {}
         for row in draft.orders:
             payload = {key: row.get(key) for key in (
                 "order_number", "client_name", "product_name", "quantity", "shipment_date",
@@ -266,49 +280,11 @@ class DraftCommitService:
                 "child_sequence_number", "is_child_order", "is_linked_child_group", "priority"
             )}
             payload["status"] = payload["status"] or ""
-            payload["shipment_date"] = payload["shipment_date"] if payload["planning_mode"] == PLANNING_MODE_SHIPMENT else None
-            payload["fixed_start_date"] = payload["fixed_start_date"] if payload["planning_mode"] == PLANNING_MODE_START else None
             row_id = int(row.get("id") or -1)
-            requested_priority = int(row.get("priority") or 0)
-            if row.get("status") == ORDER_STATUS_NEW and requested_priority < 1:
-                # Returning a calculated/conflicted order to the queue appends it.
-                requested_priority = 10**9
-            # Priorities are persisted below in one pass; repeatedly calling
-            # move_order while the same list is changing produces unstable order.
-            payload["priority"] = None
             if row_id > 0 and row_id in existing:
                 repository.update_order(row_id, **payload)
-                requested_priorities[row_id] = requested_priority
             else:
-                created = repository.create_order(**payload)
-                requested_priorities[created.id] = requested_priority
-        self._apply_priorities_once(repository, requested_priorities)
-
-    @staticmethod
-    def _apply_priorities_once(
-        repository: OrdersRepository, requested: dict[int, int]
-    ) -> None:
-        """Write the final continuous queue once, retaining linked child blocks."""
-        new_orders = [o for o in repository.list_orders() if o.status == ORDER_STATUS_NEW]
-        new_orders.sort(key=lambda o: (requested.get(o.id, o.priority or 10**9), o.id))
-        emitted: set[str] = set()
-        ordered: list[Order] = []
-        for order in new_orders:
-            key = order.child_group_key if order.is_linked_child_group else None
-            if key:
-                if key in emitted:
-                    continue
-                emitted.add(key)
-                block = [o for o in new_orders if o.is_linked_child_group and o.child_group_key == key]
-                ordered.extend(sorted(block, key=lambda o: (o.child_sequence_number or 0, o.id)))
-            else:
-                ordered.append(order)
-        for priority, order in enumerate(ordered, 1):
-            order.priority = priority
-        for order in repository.list_orders():
-            if order.status != ORDER_STATUS_NEW:
-                order.priority = 0
-        repository.session.flush()
+                repository.create_order(**payload)
 
 
 def success_flash(summary: RecalculationSummary) -> str:

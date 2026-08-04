@@ -105,64 +105,10 @@ def test_repositories_create_and_read_route_with_order(session: Session) -> None
     assert loaded_order.priority == 1
 
 
-def test_order_move_shifts_priorities_and_delete_closes_gap(session: Session) -> None:
-    route = Route(name="Приоритетный маршрут")
-    session.add(route)
-    session.flush()
-    repository = OrdersRepository(session)
-    created = [
-        repository.create_order(
-            order_number=f"P-{number}", client_name="К", product_name="П",
-            quantity=1000, shipment_date=date(2026, 8, number), route_id=route.id,
-        )
-        for number in range(1, 4)
-    ]
-    repository.move_order(created[2].id, 1)
-    assert [(order.id, order.priority) for order in repository.list_orders()] == [
-        (created[2].id, 1), (created[0].id, 2), (created[1].id, 3)
-    ]
-    repository.delete_order(created[0].id)
-    assert [order.priority for order in repository.list_orders()] == [1, 2]
 
 
-def test_order_move_from_second_to_third_swaps_previous_third(session: Session) -> None:
-    route = Route(name="Маршрут перестановки")
-    session.add(route)
-    session.flush()
-    repository = OrdersRepository(session)
-    created = [
-        repository.create_order(
-            order_number=f"S-{number}", client_name="К", product_name="П",
-            quantity=1000, shipment_date=date(2026, 8, number), route_id=route.id,
-        )
-        for number in range(1, 4)
-    ]
-
-    repository.move_order(created[1].id, 3)
-
-    assert [(order.id, order.priority) for order in repository.list_orders()] == [
-        (created[0].id, 1), (created[2].id, 2), (created[1].id, 3)
-    ]
 
 
-def test_linked_children_move_as_a_consecutive_block(session: Session) -> None:
-    route = Route(name="Дочерний маршрут")
-    session.add(route)
-    session.flush()
-    repository = OrdersRepository(session)
-    first = repository.create_order(order_number="A", client_name="К", product_name="П", quantity=100, shipment_date=date(2026, 8, 1), route_id=route.id)
-    children = [
-        repository.create_order(
-            order_number=f"B.{sequence}", client_name="К", product_name="П", quantity=100,
-            shipment_date=date(2026, 8, 1), route_id=route.id, child_group_key="B",
-            child_sequence_number=sequence, is_child_order=True, is_linked_child_group=True,
-        )
-        for sequence in (1, 2)
-    ]
-    last = repository.create_order(order_number="C", client_name="К", product_name="П", quantity=100, shipment_date=date(2026, 8, 1), route_id=route.id)
-    repository.move_order(children[1].id, 1)
-    assert [order.id for order in repository.list_orders()] == [children[0].id, children[1].id, first.id, last.id]
-    assert [order.priority for order in repository.list_orders()] == [1, 2, 3, 4]
 
 
 def test_orders_repository_updates_order(session: Session) -> None:

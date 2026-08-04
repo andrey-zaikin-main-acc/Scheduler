@@ -171,3 +171,11 @@ data/planner.sqlite3
 ## Session drafts and atomic planning
 
 Editable registries now use session-scoped screen drafts. Adding or pre-deleting a row does not touch SQLite. The global save action validates all participating rows, applies the draft and rebuilds the plan in one transaction; validation and technical errors preserve the draft. Route/work-center saves are explicit section actions. Manual order status is limited to **Новый** and **Отменён**; planning outcome is displayed independently.
+
+## Экранные черновики и полный пересчёт
+
+Редактируемые таблицы хранят значения только в `st.session_state` до явного действия. Участки и маршруты сохраняются локально кнопкой «Сохранить изменения» без пересчёта. «Пересчитать план» валидирует все черновики и pending delete до записи, затем сохраняет их, выполняет один полный пересчёт и один commit.
+
+Очередь фиксируется до планирования: ранее запланированные, новые, ранее конфликтные; внутри очереди действует введённый положительный уникальный приоритет. Связанные дети образуют блок по минимальному приоритету и `child_sequence_number`. После прохода приоритеты становятся общей последовательностью; отменённые получают пустое отображение (в SQLite используется недопустимый для ввода sentinel 0). План и конфликт — взаимоисключающие системные результаты, ручной статус допускает «Новый», «Отменён» или сохранённое пустое значение.
+
+История «Назад/Вперёд» относится только к экранным действиям текущей сессии. Удаление заказов откладывается до успешной общей транзакции. Табличный Python-адаптер использует стабильные DB/temporary row keys и передаёт структурированные события визуального фокуса/анимации без frontend-бизнес-логики.

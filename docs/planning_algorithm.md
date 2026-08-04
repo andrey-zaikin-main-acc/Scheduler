@@ -211,3 +211,11 @@ theoretical_route_quantity = floor(min(possible_quantity по операциям
 Before clearing the plan the service snapshots operation dates. Previously planned orders (except those manually returned to `Новый` or cancelled) are rebuilt first, ordered by their old first start and ID. New orders follow by continuous manual priority. Conflicted orders have blank system status and do not retry until explicitly marked `Новый`. Inactive routes, route operations, or work centers fail preparation with a specific conflict.
 
 `RecalculationService` flushes but never commits. The draft coordinator owns validation, mutations, recalculation, the single commit, and rollback. Start-mode output is written to `calculated_shipment_date`; shipment-mode output is written to `calculated_start_date`.
+
+## Модель экранного сохранения (актуальная)
+
+Все правки сначала являются экранным черновиком. Локальное сохранение справочника не пересчитывает план; глобальная команда проверяет все разделы и pending delete до единой транзакции. Ошибка заполнения сохраняет черновик и историю, конфликт планирования является успешным системным результатом.
+
+Полный проход использует неизменяемый snapshot трёх очередей: ранее запланированные, новые, ранее конфликтные. Приоритет — глобально уникальное положительное целое; связанные строки одной группы занимают непрерывный блок. Оба заданных поля даты разрешены в черновике, а неиспользуемое поле очищается только после успешного расчёта. Системный результат читается из planned operations либо planning conflicts.
+
+Таблицы блокируют только фиксированные системные столбцы; в заказах это ID, группа, две расчётные даты и два флага результата. «Связанные заказы» редактируется. История undo/redo, отдельные черновики операций по route ID и навигационное подтверждение живут в сессии. Свободные слоты обязаны использовать неперсистентную симуляцию основного PlanningEngine. Статические ресурсы табличного адаптера должны включаться в Windows EXE и не зависеть от CDN.
