@@ -1,0 +1,114 @@
+"""Python protocol adapter for the browser-owned orders grid."""
+
+from copy import deepcopy
+from datetime import date, datetime
+from numbers import Integral, Real
+from pathlib import Path
+from typing import Any, Callable
+
+import streamlit as st
+import streamlit.components.v1 as components
+
+from app.services.draft_history_service import DraftAction, session_history
+from app.ui.components.draft_table import stable_row_key
+
+_component = components.declare_component(
+    "drawppt_orders_grid", path=Path(__file__).with_name("orders_grid") / "frontend"
+)
+DATE_FIELDS = {"Заданная дата запуска", "Заданная дата отгрузки", "Расчётная дата запуска", "Расчётная дата отгрузки"}
+INTEGER_FIELDS = {"ID", "Приоритет", "_draft_id", "_child_sequence_number"}
+NUMBER_FIELDS = {"Тираж"}
+BOOLEAN_FIELDS = {"Выбран", "Связанные заказы", "Запланирован", "Конфликт планирования", "_is_child_order"}
+
+
+def decode_value(field: str, value: Any) -> Any:
+    """Restore JSON values to the types consumed by draft validation."""
+    if value is None:
+        return None
+    if field in DATE_FIELDS:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        return date.fromisoformat(str(value))
+    if field in BOOLEAN_FIELDS:
+        return bool(value)
+    if field in INTEGER_FIELDS:
+        return int(value) if isinstance(value, Real) and not isinstance(value, bool) else value
+    if field in NUMBER_FIELDS:
+        return float(value) if isinstance(value, Real) and not isinstance(value, bool) else value
+    return value
+
+
+def _decode_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {field: decode_value(field, value) for field, value in row.items()}
+
+
+def apply_component_payload(state: Any, payload: dict[str, Any] | None, *,
+                            postprocess: Callable | None = None) -> list[dict[str, Any]]:
+    """Apply every unseen semantic event and acknowledge its client revision."""
+    rows = [dict(row) for row in state.get("orders_draft_rows", [])]
+    if not payload:
+        return rows
+    ack = int(state.get("orders_component_ack_revision", 0))
+    for raw in sorted(payload.get("events", []), key=lambda event: int(event["client_revision"])):
+        revision = int(raw["client_revision"])
+        if revision <= ack:
+            continue
+        before = deepcopy(rows)
+        key = raw["row_key"]
+        row = next((item for item in rows if stable_row_key(item) == key), None)
+        if row is None:
+            continue
+        field = str(raw["field"])
+        row[field] = decode_value(field, raw.get("after"))
+        if postprocess is not None:
+            rows = postprocess(before, rows)
+        if raw.get("action_type") != "selection" and not state.get("draft_history_replay_in_progress"):
+            session_history(state).record(DraftAction(
+                "orders", str(raw.get("action_type") or "cell"), before, deepcopy(rows),
+                (key,), (field,), focus={"session_key": "orders_draft_rows"},
+            ))
+        ack = revision
+    # A flush snapshot is authoritative for edits already made in the iframe,
+    # including a change event delivered in the same browser turn as the click.
+    if payload.get("flush_ack") and payload.get("snapshot"):
+        snapshot = [_decode_row(dict(row)) for row in payload["snapshot"]]
+        rows = postprocess(rows, snapshot) if postprocess is not None else snapshot
+        state["orders_component_flush_ack"] = payload["flush_ack"]
+    state["orders_component_ack_revision"] = max(ack, int(payload.get("client_revision", ack)))
+    state["orders_draft_rows"] = rows
+    return rows
+
+
+def orders_component(rows: list[dict[str, Any]], *, source_version: int, columns: list[str],
+                     read_only: list[str], options: dict[str, list[str]], postprocess=None) -> list[dict[str, Any]]:
+    """Render the bundled component; same-source arguments never replace browser rows."""
+    # One-run migration bridge for sessions (and extensions) that still carry
+    # the former data_editor delta.  No data_editor is rendered or owns state.
+    legacy = st.session_state.pop("orders_page_editor", None)
+    if isinstance(legacy, dict) and legacy.get("edited_rows"):
+        revision = int(st.session_state.get("orders_component_ack_revision", 0))
+        events = []
+        for index, changes in legacy["edited_rows"].items():
+            index = int(index)
+            if index >= len(rows):
+                continue
+            key = stable_row_key(rows[index])
+            for field, after in changes.items():
+                revision += 1
+                events.append({"row_key": key, "field": field,
+                               "before": rows[index].get(field), "after": after,
+                               "client_revision": revision,
+                               "action_type": "selection" if field == "Выбран" else "cell"})
+        rows = apply_component_payload(st.session_state, {
+            "client_revision": revision, "events": events,
+        }, postprocess=postprocess)
+    flush_token = st.session_state.get("orders_component_flush_request")
+    payload = _component(
+        rows=rows, source_version=source_version,
+        server_ack_revision=int(st.session_state.get("orders_component_ack_revision", 0)),
+        flush_token=flush_token, columns=columns, read_only=read_only, options=options,
+        key="orders_browser_grid", default=None,
+    )
+    return apply_component_payload(st.session_state, payload, postprocess=postprocess)

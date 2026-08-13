@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box}body{margin:0;font:14px Arial,sans-serif;color:#31333f}.viewport{height:420px;overflow:auto;border:1px solid #dfe2e6;border-radius:4px}table{border-collapse:separate;border-spacing:0;min-width:1900px;width:100%}th,td{border-right:1px solid #e6e8eb;border-bottom:1px solid #e6e8eb;padding:5px 7px;white-space:nowrap;height:35px}th{position:sticky;top:0;background:#f7f8fa;z-index:2;font-weight:600;text-align:left}input,select{font:inherit;border:0;background:transparent;width:100%;min-width:80px;padding:4px}input:focus,select:focus{outline:2px solid #ff4b4b;outline-offset:0}input[type=checkbox]{min-width:18px;width:18px}.readonly{background:#f7f8fa;color:#666}.date{min-width:130px}
+</style></head><body><div id="grid"></div><script src="model.js"></script><script>
+const M=OrdersGridModel;let state=null,args=null;
+const dateFields=new Set(["Заданная дата запуска","Заданная дата отгрузки"]);
+const numericFields=new Set(["Приоритет","Тираж"]);
+function post(type,data){parent.postMessage(Object.assign({isStreamlitMessage:true,type},data||{}),"*")}
+function value(flush){post("streamlit:setComponentValue",{value:M.payload(state,flush),dataType:"json"})}
+function parse(el,field){if(el.type==="checkbox")return el.checked;if(el.type==="number")return el.value===""?null:Number(el.value);return el.value===""?null:el.value}
+function makeEditor(row,field,key){const disabled=(args.read_only||[]).includes(field);let el;
+  const options=(args.options||{})[field];
+  if(field==="Выбран"){el=document.createElement("input");el.type="checkbox";el.checked=!!row[field]}
+  else if(options){el=document.createElement("select");for(const option of options){const o=document.createElement("option");o.value=option;o.textContent=option||"—";el.appendChild(o)}el.value=row[field]??""}
+  else{el=document.createElement("input");el.type=dateFields.has(field)?"date":numericFields.has(field)?"number":"text";if(dateFields.has(field))el.className="date";el.value=row[field]??""}
+  el.disabled=disabled;el.dataset.key=key;el.dataset.field=field;
+  el.addEventListener("focus",()=>{state.active={key,field};state.draftValue=el.value});
+  el.addEventListener("input",()=>{state.draftValue=el.value});
+  el.addEventListener("change",()=>{const after=parse(el,field);M.edit(state,key,field,after,field==="Выбран"?"selection":el.type==="checkbox"?"checkbox":"cell");state.draftValue=null;value(null)});
+  return el}
+function draw(){const host=document.getElementById("grid"),old=host.querySelector(".viewport");if(old){state.scrollTop=old.scrollTop;state.scrollLeft=old.scrollLeft}
+  host.textContent="";const viewport=document.createElement("div");viewport.className="viewport";const table=document.createElement("table"),head=document.createElement("thead"),hr=document.createElement("tr");
+  for(const field of args.columns){const th=document.createElement("th");th.textContent=field;hr.appendChild(th)}head.appendChild(hr);table.appendChild(head);const body=document.createElement("tbody");
+  for(const row of state.rows){const tr=document.createElement("tr"),key=M.rowKey(row);for(const field of args.columns){const td=document.createElement("td");if((args.read_only||[]).includes(field))td.className="readonly";td.appendChild(makeEditor(row,field,key));tr.appendChild(td)}body.appendChild(tr)}table.appendChild(body);viewport.appendChild(table);host.appendChild(viewport);viewport.scrollTop=state.scrollTop;viewport.scrollLeft=state.scrollLeft;
+  if(state.active){const el=viewport.querySelector(`[data-key="${state.active.key}"][data-field="${CSS.escape(state.active.field)}"]`);if(el){el.focus({preventScroll:true});if(state.draftValue!==null)el.value=state.draftValue}}
+  post("streamlit:setFrameHeight",{height:422})}
+window.addEventListener("message",event=>{if(event.data.type!=="streamlit:render")return;args=event.data.args;if(!state)state=M.create(args.rows,args.source_version);else state=M.render(state,args);draw();if(args.flush_token)value(args.flush_token)});
+post("streamlit:componentReady",{apiVersion:1});post("streamlit:setFrameHeight",{height:422});
+</script></body></html>
