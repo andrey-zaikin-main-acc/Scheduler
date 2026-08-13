@@ -7,8 +7,14 @@ from typing import Any, Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.constants import MANUAL_ORDER_STATUSES, ORDER_STATUS_NEW, PLANNING_MODE_SHIPMENT, PLANNING_MODE_START
-from app.db.models import Order, Route, RouteOperation
+from app.constants import (
+    MANUAL_ORDER_STATUSES,
+    ORDER_STATUS_CANCELLED,
+    ORDER_STATUS_NEW,
+    PLANNING_MODE_SHIPMENT,
+    PLANNING_MODE_START,
+)
+from app.db.models import Order, PlannedOperation, PlanningConflict, Route, RouteOperation
 from app.repositories.orders_repository import OrdersRepository
 from app.services.recalculation_service import RecalculationService, RecalculationSummary
 
@@ -34,9 +40,17 @@ class DraftCommitResult:
 class DraftCommitService:
     """Validate first, then apply and recalculate under exactly one commit."""
 
-    def __init__(self, session: Session, recalculation_factory: Callable[[Session], RecalculationService] = RecalculationService):
+    def __init__(
+        self,
+        session: Session,
+        recalculation_factory: Callable[[Session], RecalculationService] = RecalculationService,
+        *,
+        current_date: date | None = None,
+    ):
         self.session = session
         self.recalculation_factory = recalculation_factory
+        # Capture the application's local date once for the whole validation pass.
+        self.current_date = current_date or date.today()
 
     def commit(self, draft: DraftBundle, *, sections: set[str] | None = None) -> DraftCommitResult:
         """Compatibility alias for the only global, recalculating operation."""
@@ -123,6 +137,13 @@ class DraftCommitService:
         existing_statuses = {
             order.id: order.status for order in self.session.scalars(select(Order)).all()
         }
+        previously_planned_ids = set(
+            self.session.scalars(select(PlannedOperation.order_id).distinct()).all()
+        )
+        previously_conflicted_ids = set(
+            self.session.scalars(select(PlanningConflict.order_id).distinct()).all()
+        )
+        inconsistent_ids = previously_planned_ids & previously_conflicted_ids
         numbers: dict[str, int] = {}
         priorities: dict[int, int] = {}
         final_order_rows = [row for row in draft.orders if not (
@@ -131,6 +152,11 @@ class DraftCommitService:
             identity = row.get('id') if row.get('id') is not None else row.get('_draft_id', 'временный')
             number_label = str(row.get("order_number") or "без номера")
             label = f"Заказы, строка {index} (ID {identity}, номер {number_label})"
+            persisted_order_id = row.get("id")
+            if persisted_order_id in inconsistent_ids:
+                errors.append(
+                    f"{label}: ошибка целостности — одновременно сохранены плановые операции и конфликт."
+                )
             for field_name, caption in (("order_number", "Номер"), ("client_name", "Клиент"), ("product_name", "Продукция")):
                 if not str(row.get(field_name) or "").strip():
                     errors.append(f"{label}, поле «{caption}»: обязательное поле.")
@@ -161,14 +187,43 @@ class DraftCommitService:
             if status not in MANUAL_ORDER_STATUSES and not unchanged_system_status:
                 errors.append(f"{label}: поле status можно вручную задать только как Новый или Отменён.")
             mode = row.get("planning_mode", PLANNING_MODE_SHIPMENT)
+            active_date = None
+            active_caption = None
             if mode == PLANNING_MODE_START:
-                if not isinstance(row.get("fixed_start_date"), date):
+                active_date = row.get("fixed_start_date")
+                active_caption = "Заданная дата запуска"
+                if not isinstance(active_date, date):
                     errors.append(f"{label}, поле «Заданная дата запуска»: обязательное поле.")
             elif mode == PLANNING_MODE_SHIPMENT:
-                if not isinstance(row.get("shipment_date"), date):
+                active_date = row.get("shipment_date")
+                active_caption = "Заданная дата отгрузки"
+                if not isinstance(active_date, date):
                     errors.append(f"{label}, поле «Заданная дата отгрузки»: обязательное поле.")
             else:
                 errors.append(f"{label}: неизвестный режим планирования.")
+            is_cancelled = status == ORDER_STATUS_CANCELLED
+            is_manually_new = status == ORDER_STATUS_NEW
+            is_previously_planned = (
+                persisted_order_id in previously_planned_ids
+                and not is_manually_new
+                and not is_cancelled
+            )
+            if (
+                isinstance(active_date, date)
+                and active_date < self.current_date
+                and not is_cancelled
+                and not is_previously_planned
+            ):
+                reason = (
+                    "ранее конфликтного заказа"
+                    if persisted_order_id in previously_conflicted_ids
+                    else "нового заказа"
+                )
+                errors.append(
+                    f"{label}, поле «{active_caption}»: дата {active_date:%d.%m.%Y} "
+                    f"не может быть раньше текущей даты {self.current_date:%d.%m.%Y} "
+                    f"для {reason}."
+                )
         return errors
 
     def _validate_work_centers(self, rows: list[dict[str, Any]]) -> list[str]:
