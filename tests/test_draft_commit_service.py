@@ -14,7 +14,7 @@ def make_session():
 
 def valid_row(route_id):
     return {'id':-1,'priority':1,'order_number':'D-1','client_name':'C','product_name':'P','quantity':10,
-      'shipment_date':date(2026,8,1),'fixed_start_date':None,'route_id':route_id,'status':ORDER_STATUS_NEW,
+      'shipment_date':date(2026,8,6),'fixed_start_date':None,'route_id':route_id,'status':ORDER_STATUS_NEW,
       'planning_mode':'От даты отгрузки','child_group_key':None,'child_sequence_number':None,
       'is_child_order':False,'is_linked_child_group':False}
 
