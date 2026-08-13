@@ -21,6 +21,21 @@ NUMBER_FIELDS = {"Тираж"}
 BOOLEAN_FIELDS = {"Выбран", "Связанные заказы", "Запланирован", "Конфликт планирования", "_is_child_order"}
 
 
+def encode_value(field: str, value: Any) -> Any:
+    """Convert business-layer values to the component's JSON transport types."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
+def _encode_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {field: encode_value(field, value) for field, value in row.items()}
+
+
 def decode_value(field: str, value: Any) -> Any:
     """Restore JSON values to the types consumed by draft validation."""
     if value is None:
@@ -105,8 +120,9 @@ def orders_component(rows: list[dict[str, Any]], *, source_version: int, columns
             "client_revision": revision, "events": events,
         }, postprocess=postprocess)
     flush_token = st.session_state.get("orders_component_flush_request")
+    component_rows = [_encode_row(dict(row)) for row in rows]
     payload = _component(
-        rows=rows, source_version=source_version,
+        rows=component_rows, source_version=source_version,
         server_ack_revision=int(st.session_state.get("orders_component_ack_revision", 0)),
         flush_token=flush_token, columns=columns, read_only=read_only, options=options,
         key="orders_browser_grid", default=None,
