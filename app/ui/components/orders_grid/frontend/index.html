@@ -1,28 +1,40 @@
 <!doctype html><html><head><meta charset="utf-8"><style>
-*{box-sizing:border-box}body{margin:0;font:14px Arial,sans-serif;color:#31333f}.viewport{height:420px;overflow:auto;border:1px solid #dfe2e6;border-radius:4px}table{border-collapse:separate;border-spacing:0;min-width:1900px;width:100%}th,td{border-right:1px solid #e6e8eb;border-bottom:1px solid #e6e8eb;padding:5px 7px;white-space:nowrap;height:35px}th{position:sticky;top:0;background:#f7f8fa;z-index:2;font-weight:600;text-align:left}input,select{font:inherit;border:0;background:transparent;width:100%;min-width:80px;padding:4px}input:focus,select:focus{outline:2px solid #ff4b4b;outline-offset:0}input[type=checkbox]{min-width:18px;width:18px}.readonly{background:#f7f8fa;color:#666}.date{min-width:130px}
-</style></head><body><div id="grid"></div><script src="model.js"></script><script>
-const M=OrdersGridModel;let state=null,args=null;
-const dateFields=new Set(["Заданная дата запуска","Заданная дата отгрузки"]);
-const numericFields=new Set(["Приоритет","Тираж"]);
+:root{--text:#31333f;--background:#fff;--secondary-background:#f0f2f6;--primary:#ff4b4b;--font:sans-serif}
+*{box-sizing:border-box}body{margin:0;font:14px var(--font),sans-serif;color:var(--text);background:var(--background)}
+.viewport{max-height:420px;overflow:auto;border:1px solid color-mix(in srgb,var(--text) 22%,var(--background));border-radius:4px;background:var(--background)}
+table{border-collapse:separate;border-spacing:0;min-width:1900px;width:100%;background:var(--background)}
+th,td{border-right:1px solid color-mix(in srgb,var(--text) 14%,var(--background));border-bottom:1px solid color-mix(in srgb,var(--text) 14%,var(--background));padding:5px 7px;white-space:nowrap;height:35px;background:var(--background)}
+th{position:sticky;top:0;background:var(--secondary-background);z-index:2;font-weight:600;text-align:left;color:var(--text)}
+input,select{font:inherit;color:inherit;border:0;background:var(--background);width:100%;min-width:80px;padding:4px;color-scheme:light dark}
+input:focus,select:focus{outline:2px solid var(--primary);outline-offset:0}
+input[type=checkbox]{min-width:18px;width:18px;accent-color:var(--primary)}
+.readonly{background:color-mix(in srgb,var(--secondary-background) 45%,var(--background));color:color-mix(in srgb,var(--text) 72%,var(--background))}
+.readonly-display{display:block;padding:4px;min-height:26px}.readonly input[type=checkbox]{background:transparent;opacity:1;cursor:default}.date{min-width:130px}
+</style></head><body><div id="grid"></div><script src="model.js"></script><script src="view.js"></script><script>
+const M=OrdersGridModel,V=OrdersGridView;let state=null,args=null;
 function post(type,data){parent.postMessage(Object.assign({isStreamlitMessage:true,type},data||{}),"*")}
 function value(flush){post("streamlit:setComponentValue",{value:M.payload(state,flush),dataType:"json"})}
 function parse(el,field){if(el.type==="checkbox")return el.checked;if(el.type==="number")return el.value===""?null:Number(el.value);return el.value===""?null:el.value}
-function makeEditor(row,field,key){const disabled=(args.read_only||[]).includes(field);let el;
+function makeEditor(row,field,key){let el;
   const options=(args.options||{})[field];
-  if(field==="Выбран"){el=document.createElement("input");el.type="checkbox";el.checked=!!row[field]}
+  if(V.BOOLEAN_FIELDS.has(field)){el=document.createElement("input");el.type="checkbox";el.checked=!!row[field]}
   else if(options){el=document.createElement("select");for(const option of options){const o=document.createElement("option");o.value=option;o.textContent=option||"—";el.appendChild(o)}el.value=row[field]??""}
-  else{el=document.createElement("input");el.type=dateFields.has(field)?"date":numericFields.has(field)?"number":"text";if(dateFields.has(field))el.className="date";el.value=row[field]??""}
-  el.disabled=disabled;el.dataset.key=key;el.dataset.field=field;
+  else{el=document.createElement("input");el.type=V.DATE_FIELDS.has(field)?"date":V.NUMERIC_FIELDS.has(field)?"number":"text";if(V.DATE_FIELDS.has(field))el.className="date";el.value=row[field]??""}
+  el.dataset.key=key;el.dataset.field=field;
   el.addEventListener("focus",()=>{state.active={key,field};state.draftValue=el.value});
   el.addEventListener("input",()=>{state.draftValue=el.value});
   el.addEventListener("change",()=>{const after=parse(el,field);M.edit(state,key,field,after,field==="Выбран"?"selection":el.type==="checkbox"?"checkbox":"cell");state.draftValue=null;value(null)});
   return el}
+function makeRenderer(row,field){
+  if(V.BOOLEAN_FIELDS.has(field)){const el=document.createElement("input");el.type="checkbox";el.checked=!!row[field];el.disabled=true;el.setAttribute("aria-label",field);return el}
+  const el=document.createElement("span");el.className="readonly-display";el.textContent=V.DATE_FIELDS.has(field)?V.formatDate(row[field]):(row[field]??"");return el}
+function applyTheme(theme){for(const [name,value] of Object.entries(V.themeVars(theme)))document.documentElement.style.setProperty(name,value)}
 function draw(){const host=document.getElementById("grid"),old=host.querySelector(".viewport");if(old){state.scrollTop=old.scrollTop;state.scrollLeft=old.scrollLeft}
   host.textContent="";const viewport=document.createElement("div");viewport.className="viewport";const table=document.createElement("table"),head=document.createElement("thead"),hr=document.createElement("tr");
   for(const field of args.columns){const th=document.createElement("th");th.textContent=field;hr.appendChild(th)}head.appendChild(hr);table.appendChild(head);const body=document.createElement("tbody");
-  for(const row of state.rows){const tr=document.createElement("tr"),key=M.rowKey(row);for(const field of args.columns){const td=document.createElement("td");if((args.read_only||[]).includes(field))td.className="readonly";td.appendChild(makeEditor(row,field,key));tr.appendChild(td)}body.appendChild(tr)}table.appendChild(body);viewport.appendChild(table);host.appendChild(viewport);viewport.scrollTop=state.scrollTop;viewport.scrollLeft=state.scrollLeft;
+  for(const row of state.rows){const tr=document.createElement("tr"),key=M.rowKey(row);for(const field of args.columns){const td=document.createElement("td"),readOnly=(args.read_only||[]).includes(field);if(readOnly)td.className="readonly";td.dataset.kind=V.cellKind(field,readOnly,(args.options||{})[field]);td.appendChild(readOnly?makeRenderer(row,field):makeEditor(row,field,key));tr.appendChild(td)}body.appendChild(tr)}table.appendChild(body);viewport.appendChild(table);host.appendChild(viewport);viewport.scrollTop=state.scrollTop;viewport.scrollLeft=state.scrollLeft;
   if(state.active){const el=viewport.querySelector(`[data-key="${state.active.key}"][data-field="${CSS.escape(state.active.field)}"]`);if(el){el.focus({preventScroll:true});if(state.draftValue!==null)el.value=state.draftValue}}
-  post("streamlit:setFrameHeight",{height:422})}
-window.addEventListener("message",event=>{if(event.data.type!=="streamlit:render")return;args=event.data.args;if(!state)state=M.create(args.rows,args.source_version);else state=M.render(state,args);draw();if(args.flush_token)value(args.flush_token)});
-post("streamlit:componentReady",{apiVersion:1});post("streamlit:setFrameHeight",{height:422});
+  requestAnimationFrame(()=>post("streamlit:setFrameHeight",{height:V.frameHeight(viewport)}))}
+window.addEventListener("message",event=>{if(event.data.type!=="streamlit:render")return;args=event.data.args;applyTheme(event.data.theme);if(!state)state=M.create(args.rows,args.source_version);else state=M.render(state,args);draw();if(args.flush_token)value(args.flush_token)});
+post("streamlit:componentReady",{apiVersion:1});post("streamlit:setFrameHeight",{height:0});
 </script></body></html>
