@@ -22,8 +22,8 @@ from app.db.models import Order, RecalculationRun, Route, RouteOperation, WorkCe
 from app.repositories.orders_repository import OrdersRepository
 from app.services.route_capacity_service import RouteCapacityService
 from app.ui.components.tables import order_rows
-from app.ui.components.draft_table import draft_table
 from app.ui.components.draft_table import next_draft_id
+from app.ui.components.orders_component import orders_component
 # Kept as a compatibility symbol for downstream extensions; the production
 # orders page never invokes this legacy immediate-save helper.
 from app.ui.pages.page_utils import recalculate_after_save
@@ -87,19 +87,21 @@ def render_orders_page() -> None:
             replace_order_editor_source("database-load")
         rows = st.session_state.orders_draft_rows
         _sync_order_editor_state(rows)
-        edited = draft_table(rows, key=ORDER_EDITOR_KEY, use_container_width=True, hide_index=True,
-            disabled=READ_ONLY_EDITOR_COLUMNS, column_order=EDITOR_COLUMNS, num_rows="fixed",
+        edited = orders_component(
+            rows,
+            source_version=int(st.session_state.get(_ORDER_EDITOR_SOURCE_VERSION_KEY, 0)),
+            columns=EDITOR_COLUMNS,
+            read_only=READ_ONLY_EDITOR_COLUMNS,
+            options={
+                "Статус": ["", *MANUAL_ORDER_STATUSES],
+                "Маршрут": list(dict.fromkeys(
+                    [route.name for route in routes]
+                    + [str(row.get("Маршрут")) for row in rows if row.get("Маршрут")]
+                )),
+                "Режим планирования": list(PLANNING_MODES),
+            },
             postprocess=reconcile_linked_groups,
-            column_config={
-                "Выбран": st.column_config.CheckboxColumn("Выбран"),
-                "Статус": st.column_config.SelectboxColumn("Статус", options=["", *MANUAL_ORDER_STATUSES]),
-                "Маршрут": st.column_config.SelectboxColumn("Маршрут", options=list(dict.fromkeys(
-                    [route.name for route in routes] + [str(row.get("Маршрут")) for row in rows if row.get("Маршрут")]
-                ))),
-                "Режим планирования": st.column_config.SelectboxColumn("Режим планирования", options=list(PLANNING_MODES)),
-                "Заданная дата запуска": st.column_config.DateColumn("Заданная дата запуска", format="DD.MM.YYYY"),
-                "Заданная дата отгрузки": st.column_config.DateColumn("Заданная дата отгрузки", format="DD.MM.YYYY"),
-            }).rows if rows else []
+        ) if rows else []
         # Capture the current editor value on every rerun. Navigation deliberately
         # handles the recalculation button after this page has rendered.
         st.session_state.orders_draft_rows = edited

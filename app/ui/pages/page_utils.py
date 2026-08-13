@@ -64,6 +64,7 @@ def commit_all_session_drafts(*, sections: set[str] | None = None, message_targe
                 "work_centers": {"work_centers_draft_rows", "work_centers_page_editor",
                                  "work_centers_page_has_draft_row", "work_centers_page_selected_id"},
             }
+            old_order_source_version = int(st.session_state.get("orders_page_editor_source_version", 0))
             clear_keys = set().union(*(section_keys[name] for name in selected_sections))
             for key in list(st.session_state):
                 if (key in clear_keys or ("routes" in selected_sections and key.startswith("routes_page_operation_editor_"))
@@ -71,6 +72,12 @@ def commit_all_session_drafts(*, sections: set[str] | None = None, message_targe
                     st.session_state.pop(key, None)
             if "orders" in selected_sections:
                 st.session_state["orders_pending_delete_ids"] = set()
+                # Never reuse the component's old source version after clearing
+                # the session snapshot: the next DB load is authoritative.
+                st.session_state["orders_page_editor_source_version"] = old_order_source_version + 1
+                for key in ("orders_component_ack_revision", "orders_component_flush_ack",
+                            "orders_component_flush_request", "orders_recalculation_requested"):
+                    st.session_state.pop(key, None)
             st.session_state["draft_flash"] = (success_flash(result.summary) if result.summary else "Изменения сохранены без пересчёта плана.")
             st.rerun()
             return True
