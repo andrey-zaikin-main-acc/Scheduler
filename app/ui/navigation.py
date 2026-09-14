@@ -67,6 +67,7 @@ def complete_pending_navigation(state) -> str:
     state.pop("pending_navigation_target", None)
     state.pop("pending_navigation_commit", None)
     state.pop("pending_navigation_commit_completed", None)
+    state.pop("pending_navigation_discard_completed", None)
     state["nav_group_data"] = target if target in DATA_PAGES else None
     state["nav_group_plan"] = target if target in RESULT_PAGES else None
     return target
@@ -79,7 +80,10 @@ def render_navigation() -> None:
     initialize_database()
     st.title("Production Planner MVP")
     st.caption("Локальный прототип планирования производства с SQLite")
-    if st.session_state.get("pending_navigation_commit_completed"):
+    # Session state keys owned by Streamlit widgets must only be programmatically
+    # changed before those widgets are instantiated in the current run.
+    if (st.session_state.get("pending_navigation_commit_completed")
+            or st.session_state.get("pending_navigation_discard_completed")):
         complete_pending_navigation(st.session_state)
     current = st.session_state.setdefault("current_page", PAGES[0])
 
@@ -119,9 +123,8 @@ def render_navigation() -> None:
             section = "routes" if current == "Маршруты" else "work_centers"
             st.session_state["pending_navigation_commit"] = True
             if commit_all_session_drafts(sections={section}, message_target=st):
-                # Test doubles may return normally; production reruns from inside
-                # commit_all_session_drafts after setting the completion marker.
-                complete_pending_navigation(st.session_state)
+                # Production reruns inside commit_all_session_drafts.  Keep this
+                # fallback for test doubles without completing after the radios.
                 st.rerun()
             st.session_state.pop("pending_navigation_commit", None)
         if no.button("Нет"):
@@ -145,7 +148,7 @@ def render_navigation() -> None:
             if section == "routes":
                 session_history(st.session_state).clear_section("operations")
             st.session_state[f"{section}_dirty"] = False
-            complete_pending_navigation(st.session_state)
+            st.session_state["pending_navigation_discard_completed"] = True
             st.rerun()
 
     if page == "Реестр заказов":
