@@ -72,6 +72,17 @@ def commit_all_session_drafts(*, sections: set[str] | None = None, message_targe
                 if (key in clear_keys or ("routes" in selected_sections and key.startswith("routes_page_operation_editor_"))
                         or ("orders" in selected_sections and (key.startswith("order_mode_") or key.startswith("order_date_")))):
                     st.session_state.pop(key, None)
+            # Component protocol state is no longer meaningful after the DB
+            # snapshot becomes authoritative.
+            for key in list(st.session_state):
+                if any(key.startswith(f"{editor}_component_") for editor in (
+                    "routes_page_route_editor", "work_centers_page_editor",
+                )):
+                    st.session_state.pop(key, None)
+                if key.startswith("routes_page_operation_editor_") and "_component_" in key:
+                    st.session_state.pop(key, None)
+                if "routes" in selected_sections and key.startswith("route_operations_draft_rows_"):
+                    st.session_state.pop(key, None)
             if "orders" in selected_sections:
                 st.session_state["orders_pending_delete_ids"] = set()
                 # Never reuse the component's old source version after clearing

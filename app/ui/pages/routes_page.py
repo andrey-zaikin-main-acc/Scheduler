@@ -9,7 +9,10 @@ from app.db.models import Route, RouteOperation, WorkCenter
 from app.repositories.routes_repository import RoutesRepository
 from app.repositories.work_centers_repository import WorkCentersRepository
 from app.ui.components.tables import route_operation_rows, route_rows
-from app.ui.components.draft_table import draft_table, new_draft_row, replace_table_source
+from app.ui.components.draft_table import new_draft_row, replace_table_source
+from app.ui.components.reference_table import (
+    clear_reference_save, reference_save_ready, reference_table, request_reference_save,
+)
 from app.services.draft_history_service import DraftAction, mark_section_dirty, session_history
 from app.ui.pages.page_utils import recalculate_after_save
 
@@ -47,6 +50,11 @@ def render_routes_page() -> None:
         selected_route_id = _normalize_selected_route(routes)
 
         save_section = st.button("Сохранить изменения", use_container_width=True)
+        if save_section:
+            request_reference_save(
+                st.session_state, section="routes",
+                editor_keys=route_flush_editor_keys(selected_route_id),
+            )
 
         add_col, delete_col = st.columns(2)
         with add_col:
@@ -78,24 +86,19 @@ def render_routes_page() -> None:
         )
         if not route_rows_data:
             st.info("Маршруты пока не заведены. Нажмите «Добавить маршрут».")
+            # There is no browser owner (and therefore no active value) to
+            # acknowledge this member of the barrier.
+            token = st.session_state.get("reference_tables_flush_request")
+            if token:
+                st.session_state[f"{ROUTE_EDITOR_KEY}_component_flush_ack"] = token
+            _complete_routes_save()
             return
-        edited_routes = draft_table(
-            route_rows_data,
-            key=ROUTE_EDITOR_KEY,
-            use_container_width=True,
-            hide_index=True,
-            disabled=["ID", "Операций"],
-            column_order=ROUTE_COLUMNS,
-            num_rows="fixed",
-            column_config={
-                "Выбран": st.column_config.CheckboxColumn(
-                    "Выбран", help="Отметьте один маршрут."
-                ),
-                "ID": st.column_config.NumberColumn("ID", disabled=True),
-                "Активен": st.column_config.CheckboxColumn("Активен"),
-                "Операций": st.column_config.NumberColumn("Операций", disabled=True),
-            },
-        ).rows
+        st.session_state["routes_draft_rows"] = route_rows_data
+        edited_routes = reference_table(
+            route_rows_data, editor_key=ROUTE_EDITOR_KEY, rows_key="routes_draft_rows",
+            section="routes", columns=ROUTE_COLUMNS, read_only=["ID", "Операций"],
+            numeric_fields={"ID", "Операций"}, boolean_fields={"Выбран", "Активен"},
+        )
         edited_routes, selected_route_id, selection_changed = reconcile_single_selection(
             route_rows_data, edited_routes, previous_id=selected_route_id
         )
@@ -104,10 +107,6 @@ def render_routes_page() -> None:
             st.session_state[SELECTED_ROUTE_SESSION_KEY] = selected_route_id
             st.session_state[SELECTED_OPERATION_SESSION_KEY] = None
             st.rerun()
-        if save_section:
-            from app.ui.pages.page_utils import commit_all_session_drafts
-            commit_all_session_drafts(sections={"routes"}, message_target=st)
-
         selected_route_id = st.session_state.get(SELECTED_ROUTE_SESSION_KEY)
         selected_route = next(
             (route for route in routes if route.id == selected_route_id), None
@@ -116,6 +115,7 @@ def render_routes_page() -> None:
             _render_operations_table(
                 session, routes_repository, selected_route, work_centers
             )
+        _complete_routes_save()
 
 
 def _render_operations_table(
@@ -170,31 +170,17 @@ def _render_operations_table(
     if not rows:
         st.warning("У маршрута нет операций. Нажмите «Добавить операцию».")
         return
-    edited_rows = draft_table(
-        rows,
-        key=f"{OPERATION_EDITOR_KEY}_{route.id}",
-        use_container_width=True,
-        hide_index=True,
-        disabled=["ID"],
-        column_order=OPERATION_COLUMNS,
-        num_rows="fixed",
-        column_config={
-            "Выбран": st.column_config.CheckboxColumn(
-                "Выбран", help="Отметьте одну операцию для удаления."
-            ),
-            "ID": st.column_config.NumberColumn("ID", disabled=True),
-            "№": st.column_config.NumberColumn("№", min_value=1, step=1),
-            "Участок": st.column_config.SelectboxColumn(
-                "Участок", options=list(work_center_by_name)
-            ),
-            "Трудоёмкость на 1000": st.column_config.NumberColumn(
-                "Трудоёмкость на 1000", min_value=0.01, step=0.5
-            ),
-            "Мин. передаточная партия": st.column_config.NumberColumn(
-                "Мин. передаточная партия", min_value=0.0, step=100.0
-            ),
-        },
-    ).rows
+    editor_key = f"{OPERATION_EDITOR_KEY}_{route.id}"
+    _register_routes_flush_editor(editor_key)
+    rows_key = f"route_operations_draft_rows_{route.id}"
+    st.session_state[rows_key] = rows
+    edited_rows = reference_table(
+        rows, editor_key=editor_key, rows_key=rows_key, section="operations",
+        columns=OPERATION_COLUMNS, read_only=["ID"], route_id=route.id,
+        numeric_fields={"ID", "№", "Трудоёмкость на 1000", "Мин. передаточная партия"},
+        boolean_fields={"Выбран", "Активна"}, options={"Участок": list(work_center_by_name)},
+        focus_rows_key="route_operations_drafts_by_route_id",
+    )
     edited_rows, selected_operation_id, selection_changed = reconcile_single_selection(
         rows, edited_rows, previous_id=selected_operation_id
     )
@@ -203,6 +189,32 @@ def _render_operations_table(
     drafts_by_route[route.id] = edited_rows
     if selection_changed:
         st.session_state[SELECTED_OPERATION_SESSION_KEY] = selected_operation_id
+        st.rerun()
+
+
+def route_flush_editor_keys(selected_route_id: int | None) -> list[str]:
+    """Return every browser table that must acknowledge one atomic route save."""
+    # The operation editor is registered by the page only if it is actually
+    # rendered (a selected empty route, for example, has nothing to flush).
+    return [ROUTE_EDITOR_KEY]
+
+
+def _register_routes_flush_editor(editor_key: str) -> None:
+    if st.session_state.get("reference_tables_save_requested") != "routes":
+        return
+    editors = st.session_state.setdefault("reference_tables_flush_editors", [])
+    if editor_key not in editors:
+        editors.append(editor_key)
+
+
+def _complete_routes_save() -> None:
+    if not reference_save_ready(st.session_state, "routes"):
+        return
+    clear_reference_save(st.session_state)
+    from app.ui.pages.page_utils import commit_all_session_drafts
+    if commit_all_session_drafts(sections={"routes"}, message_target=st):
+        # Production reruns inside the commit helper; this is also useful for
+        # lightweight test doubles.
         st.rerun()
 
 

@@ -39,6 +39,10 @@
     return { client_revision: state.revision, events: clone(state.pending), snapshot: clone(state.rows),
       flush_ack: flushToken || null };
   }
-  return { create, edit, render, payload, rowKey };
+  function flushActive(state, key, field, after, actionType, flushToken) {
+    if (key !== null && key !== undefined && field) edit(state, key, field, after, actionType);
+    state.draftValue = null;
+    return payload(state, flushToken);
+  }
+  return { create, edit, render, payload, flushActive, rowKey };
 });
-

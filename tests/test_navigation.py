@@ -149,6 +149,16 @@ def test_successful_navigation_save_completes_only_on_rerun(page: str, section: 
 
     with patch("app.ui.pages.page_utils.commit_all_session_drafts", side_effect=successful_commit) as commit:
         app = yes_button.click().run()
+        token = (app.session_state["reference_tables_flush_request"]
+                 if "reference_tables_flush_request" in app.session_state else None)
+        # Routes can discover a second (operations) grid while rendering.  Ack
+        # every discovered iframe just as the browser components do.
+        for _ in range(3) if token else ():
+            for editor in app.session_state["reference_tables_flush_editors"]:
+                app.session_state[f"{editor}_component_flush_ack"] = token
+            app = app.run()
+            if commit.called:
+                break
 
     assert not app.exception
     commit.assert_called_once_with(sections={section}, message_target=navigation.st)

@@ -14,21 +14,24 @@ th.col-editable{border-left:3px solid var(--primary)}td.col-editable{border-left
 th.col-locked{color:color-mix(in srgb,var(--text) 62%,var(--background));font-style:italic}
 </style></head><body><div id="grid"></div><script src="model.js"></script><script src="view.js"></script><script>
 const M=OrdersGridModel,V=OrdersGridView;let state=null,args=null;
+function booleanFields(){return new Set(args.boolean_fields||Array.from(V.BOOLEAN_FIELDS))}
+function numericFields(){return new Set(args.numeric_fields||Array.from(V.NUMERIC_FIELDS))}
 function post(type,data){parent.postMessage(Object.assign({isStreamlitMessage:true,type},data||{}),"*")}
 function value(flush){post("streamlit:setComponentValue",{value:M.payload(state,flush),dataType:"json"})}
 function parse(el,field){if(el.type==="checkbox")return el.checked;if(el.type==="number")return el.value===""?null:Number(el.value);return el.value===""?null:el.value}
+function flushValue(token){if(!state.active)return M.payload(state,token);const el=document.querySelector(`[data-key="${state.active.key}"][data-field="${CSS.escape(state.active.field)}"]`);if(!el)return M.payload(state,token);const field=state.active.field;return M.flushActive(state,state.active.key,field,parse(el,field),field==="Выбран"?"selection":el.type==="checkbox"?"checkbox":"cell",token)}
 function makeEditor(row,field,key){let el;
   const options=(args.options||{})[field];
-  if(V.BOOLEAN_FIELDS.has(field)){el=document.createElement("input");el.type="checkbox";el.checked=!!row[field]}
+  if(booleanFields().has(field)){el=document.createElement("input");el.type="checkbox";el.checked=!!row[field]}
   else if(options){el=document.createElement("select");for(const option of options){const o=document.createElement("option");o.value=option;o.textContent=option||"—";el.appendChild(o)}el.value=row[field]??""}
-  else{el=document.createElement("input");el.type=V.DATE_FIELDS.has(field)?"date":V.NUMERIC_FIELDS.has(field)?"number":"text";if(V.DATE_FIELDS.has(field))el.className="date";el.value=row[field]??""}
+  else{el=document.createElement("input");el.type=V.DATE_FIELDS.has(field)?"date":numericFields().has(field)?"number":"text";if(V.DATE_FIELDS.has(field))el.className="date";el.value=row[field]??""}
   el.dataset.key=key;el.dataset.field=field;
   el.addEventListener("focus",()=>{state.active={key,field};state.draftValue=el.value});
   el.addEventListener("input",()=>{state.draftValue=el.value});
   el.addEventListener("change",()=>{const after=parse(el,field);M.edit(state,key,field,after,field==="Выбран"?"selection":el.type==="checkbox"?"checkbox":"cell");state.draftValue=null;value(null)});
   return el}
 function makeRenderer(row,field){
-  if(V.BOOLEAN_FIELDS.has(field)){const el=document.createElement("input");el.type="checkbox";el.checked=!!row[field];el.disabled=true;el.setAttribute("aria-label",field);return el}
+  if(booleanFields().has(field)){const el=document.createElement("input");el.type="checkbox";el.checked=!!row[field];el.disabled=true;el.setAttribute("aria-label",field);return el}
   const el=document.createElement("span");el.className="readonly-display";el.textContent=V.DATE_FIELDS.has(field)?V.formatDate(row[field]):(row[field]??"");return el}
 function applyTheme(theme){for(const [name,value] of Object.entries(V.themeVars(theme)))document.documentElement.style.setProperty(name,value)}
 function draw(){const host=document.getElementById("grid"),old=host.querySelector(".viewport");if(old){state.scrollTop=old.scrollTop;state.scrollLeft=old.scrollLeft}
@@ -38,6 +41,6 @@ function draw(){const host=document.getElementById("grid"),old=host.querySelecto
   for(const row of state.rows){const tr=document.createElement("tr"),key=M.rowKey(row);for(const field of args.columns){const td=document.createElement("td"),readOnly=readOnlyFields.includes(field);if(readOnly)td.className="readonly";else if(accentField(field))td.className="col-editable";td.dataset.kind=V.cellKind(field,readOnly,(args.options||{})[field]);td.appendChild(readOnly?makeRenderer(row,field):makeEditor(row,field,key));tr.appendChild(td)}body.appendChild(tr)}table.appendChild(body);viewport.appendChild(table);host.appendChild(viewport);viewport.scrollTop=state.scrollTop;viewport.scrollLeft=state.scrollLeft;
   if(state.active){const el=viewport.querySelector(`[data-key="${state.active.key}"][data-field="${CSS.escape(state.active.field)}"]`);if(el){el.focus({preventScroll:true});if(state.draftValue!==null)el.value=state.draftValue}}
   requestAnimationFrame(()=>post("streamlit:setFrameHeight",{height:V.frameHeight(viewport)}))}
-window.addEventListener("message",event=>{if(event.data.type!=="streamlit:render")return;args=event.data.args;applyTheme(event.data.theme);if(!state)state=M.create(args.rows,args.source_version);else state=M.render(state,args);draw();if(args.flush_token)value(args.flush_token)});
+window.addEventListener("message",event=>{if(event.data.type!=="streamlit:render")return;args=event.data.args;applyTheme(event.data.theme);if(!state)state=M.create(args.rows,args.source_version);else state=M.render(state,args);draw();if(args.flush_token)post("streamlit:setComponentValue",{value:flushValue(args.flush_token),dataType:"json"})});
 post("streamlit:componentReady",{apiVersion:1});post("streamlit:setFrameHeight",{height:0});
 </script></body></html>
