@@ -119,15 +119,17 @@ def render_navigation() -> None:
         st.warning("Сохранить изменения?")
         yes, no = st.columns(2)
         if yes.button("Да"):
-            from app.ui.pages.page_utils import commit_all_session_drafts
+            from app.ui.components.reference_table import request_reference_save
+            from app.ui.pages.routes_page import route_flush_editor_keys
             section = "routes" if current == "Маршруты" else "work_centers"
-            st.session_state["pending_navigation_commit"] = True
-            if commit_all_session_drafts(sections={section}, message_target=st):
-                # Production reruns inside commit_all_session_drafts.  Keep this
-                # fallback for test doubles without completing after the radios.
-                st.rerun()
-            st.session_state.pop("pending_navigation_commit", None)
+            editor_keys = (route_flush_editor_keys(st.session_state.get("routes_page_selected_route_id"))
+                           if section == "routes" else ["work_centers_page_editor"])
+            request_reference_save(
+                st.session_state, section=section, editor_keys=editor_keys, navigation=True
+            )
         if no.button("Нет"):
+            from app.ui.components.reference_table import clear_reference_save
+            clear_reference_save(st.session_state)
             section = "routes" if current == "Маршруты" else "work_centers"
             discard_keys = (
                 ("routes_draft_rows", "route_operations_drafts_by_route_id",

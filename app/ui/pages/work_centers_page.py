@@ -9,7 +9,10 @@ from app.db.database import SessionLocal
 from app.db.models import WorkCenter
 from app.repositories.work_centers_repository import WorkCentersRepository
 from app.ui.components.tables import work_center_rows
-from app.ui.components.draft_table import draft_table, new_draft_row, replace_table_source
+from app.ui.components.draft_table import new_draft_row, replace_table_source
+from app.ui.components.reference_table import (
+    clear_reference_save, reference_save_ready, reference_table, request_reference_save,
+)
 from app.services.draft_history_service import DraftAction, mark_section_dirty, session_history
 from app.ui.pages.page_utils import recalculate_after_save
 
@@ -53,12 +56,23 @@ def render_work_centers_page() -> None:
         selected = [row for row in st.session_state.work_centers_draft_rows if row.get("Выбран")]
         if delete_col.button("Удалить участок", disabled=not selected):
             st.warning("Участки не удаляются физически. Снимите флаг «Активен» и сохраните раздел.")
-        edited = draft_table(st.session_state.work_centers_draft_rows, key=EDITOR_KEY, hide_index=True,
-            read_only=["ID"], column_order=EDITOR_COLUMNS, num_rows="fixed").rows
+        edited = reference_table(
+            st.session_state.work_centers_draft_rows, editor_key=EDITOR_KEY,
+            rows_key="work_centers_draft_rows", section="work_centers",
+            columns=EDITOR_COLUMNS, read_only=["ID"],
+            numeric_fields={"ID", "Доступное время в месяц"},
+            boolean_fields={"Выбран", "Активен", "Нельзя прерывать заказ при планировании"},
+        )
         st.session_state.work_centers_draft_rows = edited
         if st.button("Сохранить изменения", use_container_width=True):
+            request_reference_save(
+                st.session_state, section="work_centers", editor_keys=[EDITOR_KEY]
+            )
+        if reference_save_ready(st.session_state, "work_centers"):
+            clear_reference_save(st.session_state)
             from app.ui.pages.page_utils import commit_all_session_drafts
-            commit_all_session_drafts(sections={"work_centers"}, message_target=st)
+            if commit_all_session_drafts(sections={"work_centers"}, message_target=st):
+                st.rerun()
 
 
 def build_work_center_editor_rows(
