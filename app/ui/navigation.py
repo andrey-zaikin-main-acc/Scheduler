@@ -1,7 +1,6 @@
 """Navigation shell for the MVP user interface."""
 
 import streamlit as st
-from app.services.bootstrap_service import initialize_database
 
 from app.ui.pages.common import render_bootstrap_controls
 from app.ui.pages.conflicts_page import render_conflicts_page
@@ -75,9 +74,6 @@ def complete_pending_navigation(state) -> str:
 
 def render_navigation() -> None:
     """Render navigation and dispatch the selected MVP screen."""
-    # Schema creation/migrations must precede every page query, including a
-    # first manual launch against an empty SQLite file.
-    initialize_database()
     st.title("Production Planner MVP")
     st.caption("Локальный прототип планирования производства с SQLite")
     # Session state keys owned by Streamlit widgets must only be programmatically
