@@ -7,7 +7,7 @@
 
   function create(rows, sourceVersion) {
     return { rows: clone(rows), sourceVersion, revision: 0, ack: 0, pending: [], scrollTop: 0,
-      scrollLeft: 0, active: null, draftValue: null };
+      scrollLeft: 0, active: null, draftValue: null, lastFlushedToken: null };
   }
 
   function rowKey(row) { return Number.isInteger(row.ID) ? row.ID : row._draft_id; }
@@ -28,6 +28,9 @@
       const replacement = create(args.rows, args.source_version);
       replacement.revision = Math.max(state.revision, Number(args.server_ack_revision || 0));
       replacement.ack = Number(args.server_ack_revision || 0);
+      // A server snapshot must not make an already acknowledged barrier new
+      // again.  The iframe can receive the same token on several renders.
+      replacement.lastFlushedToken = state.lastFlushedToken;
       return replacement;
     }
     state.ack = Math.max(state.ack, Number(args.server_ack_revision || 0));
@@ -44,5 +47,11 @@
     state.draftValue = null;
     return payload(state, flushToken);
   }
-  return { create, edit, render, payload, flushActive, rowKey };
+  function claimFlush(state, flushToken) {
+    if (!flushToken || state.lastFlushedToken === flushToken) return false;
+    // Claim before posting the value: the post itself schedules a rerender.
+    state.lastFlushedToken = flushToken;
+    return true;
+  }
+  return { create, edit, render, payload, flushActive, claimFlush, rowKey };
 });

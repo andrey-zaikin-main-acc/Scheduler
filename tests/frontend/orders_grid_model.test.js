@@ -24,4 +24,20 @@ assert.equal(flushed.flush_ack, "save-1");
 assert.equal(flushed.snapshot[0].Name, "visible active value", "flush commits the active input");
 assert.equal(flushed.events.length, 1, "flush emits the business edit exactly once");
 
+let barrier = M.create([{ID: 1, Name: "route"}], 1);
+assert.equal(M.claimFlush(barrier, "save-1"), true, "first render claims the flush");
+for (let render = 0; render < 100; render += 1) {
+  barrier = M.render(barrier, {source_version: render === 50 ? 2 : barrier.sourceVersion,
+    server_ack_revision: 0, rows: barrier.rows});
+  assert.equal(M.claimFlush(barrier, "save-1"), false, "same token is never posted twice");
+}
+assert.equal(M.claimFlush(barrier, "save-2"), true, "a new save barrier can flush");
+assert.equal(M.claimFlush(barrier, "save-2"), false, "new token is also idempotent");
+
+const routeEditor = M.create([], 1), operationEditor = M.create([], 1);
+assert.equal(M.claimFlush(routeEditor, "atomic-1"), true);
+assert.equal(M.claimFlush(operationEditor, "atomic-1"), true);
+assert.equal(M.claimFlush(routeEditor, "atomic-1"), false);
+assert.equal(M.claimFlush(operationEditor, "atomic-1"), false);
+
 console.log("orders grid model tests passed");

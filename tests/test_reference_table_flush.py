@@ -6,7 +6,7 @@ from app.db.models import Route, RouteOperation, WorkCenter
 from app.services.draft_commit_service import DraftBundle, DraftCommitService
 from app.services.draft_history_service import session_history
 from app.ui.components.reference_table import (
-    apply_reference_payload, reference_save_ready, request_reference_save,
+    apply_reference_payload, clear_reference_save, reference_save_ready, request_reference_save,
 )
 
 
@@ -45,10 +45,16 @@ def test_active_route_flush_is_authoritative_and_is_persisted_to_sqlite():
 def test_route_save_waits_for_both_route_and_operation_snapshots_and_persists_operation():
     state = {}
     token = request_reference_save(state, section="routes", editor_keys=["route", "operation"])
+    assert request_reference_save(
+        state, section="routes", editor_keys=["route", "operation"]
+    ) == token
     state["route_component_flush_ack"] = token
     assert not reference_save_ready(state, "routes")
     state["operation_component_flush_ack"] = token
     assert reference_save_ready(state, "routes")
+    clear_reference_save(state)
+    assert "reference_tables_flush_request" not in state
+    assert not reference_save_ready(state, "routes")
 
     engine = create_engine("sqlite:///:memory:"); Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
