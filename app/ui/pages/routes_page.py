@@ -36,6 +36,9 @@ OPERATION_EDITOR_KEY = "routes_page_operation_editor"
 
 def render_routes_page() -> None:
     """Render routes and route operations with inline editing controls."""
+    # Persist the editors from each completed render so a sidebar callback can
+    # include every currently mounted iframe in the next navigation barrier.
+    st.session_state["routes_page_visible_editors"] = [ROUTE_EDITOR_KEY]
     st.header("Справочник маршрутов")
     if flash := st.session_state.pop("draft_flash", None):
         st.success(flash)
@@ -50,7 +53,7 @@ def render_routes_page() -> None:
         selected_route_id = _normalize_selected_route(routes)
 
         save_section = st.button("Сохранить изменения", use_container_width=True)
-        if save_section:
+        if save_section and not st.session_state.get("navigation_probe_pending"):
             request_reference_save(
                 st.session_state, section="routes",
                 editor_keys=route_flush_editor_keys(selected_route_id),
@@ -192,14 +195,19 @@ def _render_operations_table(
         st.rerun()
 
 
-def route_flush_editor_keys(selected_route_id: int | None) -> list[str]:
+def route_flush_editor_keys(selected_route_id: int | None, state: Any | None = None) -> list[str]:
     """Return every browser table that must acknowledge one atomic route save."""
     # The operation editor is registered by the page only if it is actually
     # rendered (a selected empty route, for example, has nothing to flush).
-    return [ROUTE_EDITOR_KEY]
+    owner = st.session_state if state is None else state
+    visible = owner.get("routes_page_visible_editors", [])
+    return list(dict.fromkeys([ROUTE_EDITOR_KEY, *visible]))
 
 
 def _register_routes_flush_editor(editor_key: str) -> None:
+    visible = st.session_state.setdefault("routes_page_visible_editors", [])
+    if editor_key not in visible:
+        visible.append(editor_key)
     if st.session_state.get("reference_tables_save_requested") != "routes":
         return
     editors = st.session_state.setdefault("reference_tables_flush_editors", [])
@@ -209,6 +217,11 @@ def _register_routes_flush_editor(editor_key: str) -> None:
 
 def _complete_routes_save() -> None:
     if not reference_save_ready(st.session_state, "routes"):
+        return
+    if st.session_state.get("reference_tables_request_kind") == "navigation_probe":
+        from app.ui.navigation import resolve_navigation_probe
+        if resolve_navigation_probe(st.session_state, "routes"):
+            st.rerun()
         return
     clear_reference_save(st.session_state)
     from app.ui.pages.page_utils import commit_all_session_drafts

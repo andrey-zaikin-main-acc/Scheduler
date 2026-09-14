@@ -64,11 +64,17 @@ def render_work_centers_page() -> None:
             boolean_fields={"Выбран", "Активен", "Нельзя прерывать заказ при планировании"},
         )
         st.session_state.work_centers_draft_rows = edited
-        if st.button("Сохранить изменения", use_container_width=True):
+        if (st.button("Сохранить изменения", use_container_width=True)
+                and not st.session_state.get("navigation_probe_pending")):
             request_reference_save(
                 st.session_state, section="work_centers", editor_keys=[EDITOR_KEY]
             )
         if reference_save_ready(st.session_state, "work_centers"):
+            if st.session_state.get("reference_tables_request_kind") == "navigation_probe":
+                from app.ui.navigation import resolve_navigation_probe
+                if resolve_navigation_probe(st.session_state, "work_centers"):
+                    st.rerun()
+                return
             clear_reference_save(st.session_state)
             from app.ui.pages.page_utils import commit_all_session_drafts
             if commit_all_session_drafts(sections={"work_centers"}, message_target=st):

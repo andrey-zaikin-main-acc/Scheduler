@@ -45,6 +45,63 @@ def test_dirty_route_navigation_keeps_target_until_confirmation() -> None:
     assert state["pending_navigation_target"] == "Реестр заказов"
 
 
+def test_clean_backend_navigation_waits_for_authoritative_probe() -> None:
+    state = _state("Маршруты", routes_dirty=False)
+    token = navigation.begin_navigation_probe(
+        state, "Реестр заказов", section="routes", editor_keys=["route", "operation"]
+    )
+    assert state["current_page"] == "Маршруты"
+    assert state["pending_navigation_target"] == "Реестр заказов"
+    assert state["navigation_probe_pending"] is True
+    assert state["reference_tables_flush_request"] == token
+    assert navigation.begin_navigation_probe(
+        state, "Реестр заказов", section="routes", editor_keys=["route", "operation"]
+    ) == token
+
+
+def test_probe_discovers_business_edit_before_showing_confirmation() -> None:
+    state = _state("Маршруты", routes_dirty=False)
+    navigation.begin_navigation_probe(
+        state, "Реестр заказов", section="routes", editor_keys=["route"]
+    )
+    state["routes_dirty"] = True
+    assert navigation.resolve_navigation_probe(state, "routes")
+    assert state["pending_navigation"] is True
+    assert state["current_page"] == "Маршруты"
+    assert state["pending_navigation_target"] == "Реестр заказов"
+    assert "reference_tables_flush_request" not in state
+
+
+@pytest.mark.parametrize("page,section", [("Маршруты", "routes"), ("Участки", "work_centers")])
+def test_clean_probe_completes_without_confirmation(page: str, section: str) -> None:
+    state = _state(page, **{f"{section}_dirty": False})
+    navigation.begin_navigation_probe(
+        state, "Реестр заказов", section=section, editor_keys=["editor"]
+    )
+    assert navigation.resolve_navigation_probe(state, section)
+    assert state["navigation_probe_clean_completed"] is True
+    assert state["pending_navigation"] is False
+    assert navigation.complete_pending_navigation(state) == "Реестр заказов"
+
+
+def test_thirty_probe_discard_stress_has_one_token_per_navigation() -> None:
+    state = _state("Маршруты", routes_dirty=False)
+    tokens = set()
+    for _ in range(30):
+        token = navigation.begin_navigation_probe(
+            state, "Реестр заказов", section="routes", editor_keys=["route", "operation"]
+        )
+        tokens.add(token)
+        state["routes_dirty"] = True
+        navigation.resolve_navigation_probe(state, "routes")
+        assert state["pending_navigation"]
+        state["routes_dirty"] = False
+        state["pending_navigation_discard_completed"] = True
+        navigation.complete_pending_navigation(state)
+        state["current_page"] = "Маршруты"
+    assert len(tokens) == 30
+
+
 def test_declining_navigation_finishes_exact_requested_page() -> None:
     state = _state(
         "Маршруты", routes_dirty=False, pending_navigation=True,

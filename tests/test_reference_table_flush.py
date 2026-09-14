@@ -6,7 +6,8 @@ from app.db.models import Route, RouteOperation, WorkCenter
 from app.services.draft_commit_service import DraftBundle, DraftCommitService
 from app.services.draft_history_service import session_history
 from app.ui.components.reference_table import (
-    apply_reference_payload, clear_reference_save, reference_save_ready, request_reference_save,
+    apply_reference_payload, clear_reference_save, reference_save_ready,
+    request_reference_navigation_probe, request_reference_save,
 )
 
 
@@ -72,6 +73,88 @@ def test_route_save_waits_for_both_route_and_operation_snapshots_and_persists_op
         )
         assert DraftCommitService(db).save_reference_section(bundle, "routes").ok
         assert db.get(RouteOperation, operation.id).labor_hours_per_1000 == 7.5
+
+
+def test_navigation_probe_reuses_idempotent_flush_without_becoming_save():
+    state = {}
+    token = request_reference_navigation_probe(
+        state, section="routes", editor_keys=["route", "operation"]
+    )
+    assert state["reference_tables_request_kind"] == "navigation_probe"
+    assert "pending_navigation_commit" not in state
+    state["route_component_flush_ack"] = token
+    assert not reference_save_ready(state, "routes")
+    state["operation_component_flush_ack"] = token
+    assert reference_save_ready(state, "routes")
+    assert request_reference_navigation_probe(
+        state, section="routes", editor_keys=["route", "operation"]
+    ) == token
+
+
+def test_navigation_probe_merges_delivered_and_active_edits_without_duplicates():
+    original = {"ID": 1, "Название": "A", "Описание": "X", "Активен": True,
+                "Операций": 0, "Выбран": False}
+    state = {"routes_draft_rows": [original]}
+    apply_reference_payload(
+        state, {"client_revision": 2, "events": [
+            _event(1, 1, "Название", "A", "B"),
+            _event(2, 1, "Описание", "X", "Y"),
+        ]}, rows_key="routes_draft_rows", editor_key="route", section="routes",
+        numeric_fields={"ID", "Операций"}, boolean_fields={"Выбран", "Активен"},
+    )
+    token = request_reference_navigation_probe(
+        state, section="routes", editor_keys=["route"]
+    )
+    snapshot = [{**state["routes_draft_rows"][0], "Активен": False}]
+    apply_reference_payload(
+        state, {"client_revision": 3, "events": [
+            _event(1, 1, "Название", "A", "B"),
+            _event(2, 1, "Описание", "X", "Y"),
+            _event(3, 1, "Активен", True, False),
+        ], "flush_ack": token, "snapshot": snapshot},
+        rows_key="routes_draft_rows", editor_key="route", section="routes",
+        numeric_fields={"ID", "Операций"}, boolean_fields={"Выбран", "Активен"},
+    )
+    assert state["routes_draft_rows"][0] == snapshot[0]
+    assert len(session_history(state).undo_stack) == 3
+    assert state["routes_dirty"] is True
+
+
+def test_selection_only_probe_remains_clean():
+    state = {"routes_draft_rows": [
+        {"ID": 1, "Название": "A", "Выбран": False}
+    ]}
+    token = request_reference_navigation_probe(
+        state, section="routes", editor_keys=["route"]
+    )
+    payload = {"client_revision": 1, "events": [{
+        **_event(1, 1, "Выбран", False, True), "action_type": "selection",
+    }], "flush_ack": token,
+        "snapshot": [{"ID": 1, "Название": "A", "Выбран": True}]}
+    apply_reference_payload(
+        state, payload, rows_key="routes_draft_rows", editor_key="route",
+        section="routes", numeric_fields={"ID"}, boolean_fields={"Выбран"},
+    )
+    assert not state.get("routes_dirty", False)
+    assert not session_history(state).undo_stack
+
+
+def test_snapshot_only_business_difference_is_authoritative_once():
+    state = {"work_centers_draft_rows": [
+        {"ID": 1, "Название": "WC", "Доступное время в месяц": 160}
+    ]}
+    token = request_reference_navigation_probe(
+        state, section="work_centers", editor_keys=["wc"]
+    )
+    payload = {"client_revision": 0, "events": [], "flush_ack": token,
+        "snapshot": [{"ID": 1, "Название": "WC", "Доступное время в месяц": 200}]}
+    apply_reference_payload(
+        state, payload, rows_key="work_centers_draft_rows", editor_key="wc",
+        section="work_centers", numeric_fields={"ID", "Доступное время в месяц"},
+        boolean_fields=set(),
+    )
+    assert state["work_centers_dirty"] is True
+    assert len(session_history(state).undo_stack) == 1
 
 
 def test_invalid_active_work_center_snapshot_stays_dirty_and_is_not_written():
