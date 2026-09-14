@@ -77,9 +77,30 @@ def apply_reference_payload(
              for field, value in dict(row).items()}
             for row in payload["snapshot"]
         ]
-        # Events already represent the user's business actions.  The snapshot
-        # is only a barrier/source of truth and must not add a duplicate action.
-        rows = postprocess(rows, snapshot) if postprocess is not None else snapshot
+        reconciled = postprocess(rows, snapshot) if postprocess is not None else snapshot
+        # Normally every difference is represented by an event above.  Treat
+        # the snapshot as authoritative nevertheless: this also makes the
+        # barrier safe if a browser event was not delivered separately.  The
+        # comparison happens *after* unseen events, so their actions are never
+        # duplicated.  Selection is UI state, not a business edit.
+        business_fields: set[str] = set()
+        old_by_key = {stable_row_key(row): row for row in rows}
+        for row in reconciled:
+            old = old_by_key.get(stable_row_key(row), {})
+            business_fields.update(
+                field for field, value in row.items()
+                if field not in {"Выбран", "_draft_id", "_route_id"}
+                and old.get(field) != value
+            )
+        if business_fields and not state.get("draft_history_replay_in_progress"):
+            session_history(state).record(DraftAction(
+                section, "snapshot", deepcopy(rows), deepcopy(reconciled),
+                tuple(stable_row_key(row) for row in reconciled),
+                tuple(sorted(business_fields)), route_id=route_id,
+                focus={"session_key": focus_rows_key or rows_key},
+            ))
+            mark_section_dirty(state, section)
+        rows = reconciled
         state[f"{editor_key}_component_flush_ack"] = flush_ack
     state[ack_key] = max(ack, int(payload.get("client_revision", ack)))
     state[rows_key] = rows
@@ -110,17 +131,37 @@ def reference_table(
     )
 
 
-def request_reference_save(state: Any, *, section: str, editor_keys: list[str], navigation: bool = False) -> str:
-    """Start one save barrier; repeated button callbacks keep the same request."""
+def _request_reference_flush(
+    state: Any, *, section: str, editor_keys: list[str], kind: str
+) -> str:
+    """Start an idempotent browser synchronization barrier."""
     from uuid import uuid4
 
     token = state.get("reference_tables_flush_request") or uuid4().hex
     state["reference_tables_flush_request"] = token
     state["reference_tables_save_requested"] = section
+    state["reference_tables_request_kind"] = kind
     state["reference_tables_flush_editors"] = list(dict.fromkeys(editor_keys))
+    return token
+
+
+def request_reference_save(state: Any, *, section: str, editor_keys: list[str], navigation: bool = False) -> str:
+    """Start one save barrier; repeated button callbacks keep the same request."""
+    token = _request_reference_flush(
+        state, section=section, editor_keys=editor_keys, kind="save"
+    )
     if navigation:
         state["pending_navigation_commit"] = True
     return token
+
+
+def request_reference_navigation_probe(
+    state: Any, *, section: str, editor_keys: list[str]
+) -> str:
+    """Flush browser state for navigation without requesting persistence."""
+    return _request_reference_flush(
+        state, section=section, editor_keys=editor_keys, kind="navigation_probe"
+    )
 
 
 def reference_save_ready(state: Any, section: str) -> bool:
@@ -134,5 +175,5 @@ def reference_save_ready(state: Any, section: str) -> bool:
 
 def clear_reference_save(state: Any) -> None:
     for key in ("reference_tables_flush_request", "reference_tables_save_requested",
-                "reference_tables_flush_editors"):
+                "reference_tables_flush_editors", "reference_tables_request_kind"):
         state.pop(key, None)

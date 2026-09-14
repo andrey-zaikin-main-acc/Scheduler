@@ -40,4 +40,15 @@ assert.equal(M.claimFlush(operationEditor, "atomic-1"), true);
 assert.equal(M.claimFlush(routeEditor, "atomic-1"), false);
 assert.equal(M.claimFlush(operationEditor, "atomic-1"), false);
 
+let probe = M.create([{ID: 7, Name: "Route A"}], 1);
+probe.active = {key: 7, field: "Name"}; probe.draftValue = "Route B";
+assert.equal(M.claimFlush(probe, "navigation-1"), true);
+const probePayload = M.flushActive(
+  probe, probe.active.key, probe.active.field, probe.draftValue, "cell", "navigation-1"
+);
+assert.equal(probePayload.snapshot[0].Name, "Route B");
+assert.equal(probePayload.events.length, 1);
+assert.equal(probePayload.flush_ack, "navigation-1");
+assert.equal(M.claimFlush(probe, "navigation-1"), false, "one navigation token emits once");
+
 console.log("orders grid model tests passed");
