@@ -10,7 +10,7 @@ from app.db.models import WorkCenter
 from app.repositories.work_centers_repository import WorkCentersRepository
 from app.ui.components.tables import work_center_rows
 from app.ui.components.draft_table import draft_table, new_draft_row, replace_table_source
-from app.services.draft_history_service import DraftAction, session_history
+from app.services.draft_history_service import DraftAction, mark_section_dirty, session_history
 from app.ui.pages.page_utils import recalculate_after_save
 
 EDITOR_COLUMNS = [
@@ -47,6 +47,7 @@ def render_work_centers_page() -> None:
                 (row["_draft_id"],), tuple(EDITOR_COLUMNS),
                 focus={"session_key": "work_centers_draft_rows"},
             ))
+            mark_section_dirty(st.session_state, "work_centers")
             replace_table_source(EDITOR_KEY)
             st.rerun()
         selected = [row for row in st.session_state.work_centers_draft_rows if row.get("Выбран")]

@@ -10,7 +10,7 @@ from app.repositories.routes_repository import RoutesRepository
 from app.repositories.work_centers_repository import WorkCentersRepository
 from app.ui.components.tables import route_operation_rows, route_rows
 from app.ui.components.draft_table import draft_table, new_draft_row, replace_table_source
-from app.services.draft_history_service import DraftAction, session_history
+from app.services.draft_history_service import DraftAction, mark_section_dirty, session_history
 from app.ui.pages.page_utils import recalculate_after_save
 
 ROUTE_COLUMNS = ["Выбран", "ID", "Название", "Описание", "Активен", "Операций"]
@@ -61,6 +61,7 @@ def render_routes_page() -> None:
                     "routes", "add", before, after, (row["_draft_id"],), tuple(ROUTE_COLUMNS),
                     focus={"session_key": "routes_draft_rows"},
                 ))
+                mark_section_dirty(st.session_state, "routes")
                 replace_table_source(ROUTE_EDITOR_KEY)
                 st.rerun()
         with delete_col:
@@ -148,6 +149,7 @@ def _render_operations_table(
                 "operations", "add", before, after, (row["_draft_id"],), tuple(OPERATION_COLUMNS),
                 route_id=route.id, focus={"session_key": "route_operations_drafts_by_route_id"},
             ))
+            mark_section_dirty(st.session_state, "operations")
             replace_table_source(f"{OPERATION_EDITOR_KEY}_{route.id}")
             st.rerun()
     with delete_col:

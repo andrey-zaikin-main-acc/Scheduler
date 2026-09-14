@@ -12,7 +12,9 @@ from app.ui.pages.orders_page import render_orders_page
 from app.ui.pages.recalculation_results_page import render_recalculation_results_page
 from app.ui.pages.routes_page import render_routes_page
 from app.ui.pages.work_centers_page import render_work_centers_page
-from app.services.draft_history_service import redo_session, session_history, undo_session
+from app.services.draft_history_service import (
+    redo_session, section_is_dirty, session_history, undo_session,
+)
 
 # Sidebar navigation grouped by purpose: source data the user edits versus the
 # planning results produced by a recalculation.  PAGES keeps the original flat
@@ -44,13 +46,30 @@ def _on_nav_plan() -> None:
 def request_navigation(state, requested: str, *, dirty: bool) -> str:
     """Pure transition used by the Streamlit shell and navigation tests."""
     current = state.setdefault("current_page", PAGES[0])
-    state["requested_page"] = requested
     if requested != current and dirty and current in {"Маршруты", "Участки"}:
         state["pending_navigation"] = True
+        state["pending_navigation_target"] = requested
+        state["requested_page"] = requested
         return current
     state["current_page"] = requested
     state["pending_navigation"] = False
+    state.pop("pending_navigation_target", None)
+    state["requested_page"] = requested
     return requested
+
+
+def complete_pending_navigation(state) -> str:
+    """Finish a confirmed transition and synchronise both sidebar groups."""
+    target = state.get("pending_navigation_target", state.get("current_page", PAGES[0]))
+    state["current_page"] = target
+    state["requested_page"] = target
+    state["pending_navigation"] = False
+    state.pop("pending_navigation_target", None)
+    state.pop("pending_navigation_commit", None)
+    state.pop("pending_navigation_commit_completed", None)
+    state["nav_group_data"] = target if target in DATA_PAGES else None
+    state["nav_group_plan"] = target if target in RESULT_PAGES else None
+    return target
 
 
 def render_navigation() -> None:
@@ -60,6 +79,8 @@ def render_navigation() -> None:
     initialize_database()
     st.title("Production Planner MVP")
     st.caption("Локальный прототип планирования производства с SQLite")
+    if st.session_state.get("pending_navigation_commit_completed"):
+        complete_pending_navigation(st.session_state)
     current = st.session_state.setdefault("current_page", PAGES[0])
 
     # Reserve a slot at the very top of the sidebar for the plan status and the
@@ -83,8 +104,12 @@ def render_navigation() -> None:
         "План и результаты", RESULT_PAGES, key="nav_group_plan",
         on_change=_on_nav_plan, label_visibility="collapsed",
     )
-    requested = st.session_state.pop("navigation_requested", current)
-    dirty = bool(st.session_state.get("routes_draft_rows") or st.session_state.get("route_operations_drafts_by_route_id")) if current == "Маршруты" else bool(st.session_state.get("work_centers_draft_rows"))
+    requested = (st.session_state.get("pending_navigation_target")
+                 if st.session_state.get("pending_navigation")
+                 else st.session_state.pop("navigation_requested", current))
+    dirty = (section_is_dirty(st.session_state, "routes") if current == "Маршруты"
+             else section_is_dirty(st.session_state, "work_centers") if current == "Участки"
+             else False)
     page = request_navigation(st.session_state, requested, dirty=dirty)
     if st.session_state.get("pending_navigation"):
         st.warning("Сохранить изменения?")
@@ -92,15 +117,35 @@ def render_navigation() -> None:
         if yes.button("Да"):
             from app.ui.pages.page_utils import commit_all_session_drafts
             section = "routes" if current == "Маршруты" else "work_centers"
+            st.session_state["pending_navigation_commit"] = True
             if commit_all_session_drafts(sections={section}, message_target=st):
-                st.session_state.current_page = requested
+                # Test doubles may return normally; production reruns from inside
+                # commit_all_session_drafts after setting the completion marker.
+                complete_pending_navigation(st.session_state)
+                st.rerun()
+            st.session_state.pop("pending_navigation_commit", None)
         if no.button("Нет"):
             section = "routes" if current == "Маршруты" else "work_centers"
-            for key in (("routes_draft_rows", "route_operations_drafts_by_route_id") if section == "routes" else ("work_centers_draft_rows",)):
+            discard_keys = (
+                ("routes_draft_rows", "route_operations_drafts_by_route_id",
+                 "routes_page_route_editor", "routes_page_has_draft_route",
+                 "routes_page_has_draft_operation", "routes_page_selected_route_id",
+                 "routes_page_selected_operation_id")
+                if section == "routes" else
+                ("work_centers_draft_rows", "work_centers_page_editor",
+                 "work_centers_page_has_draft_row", "work_centers_page_selected_id")
+            )
+            for key in discard_keys:
                 st.session_state.pop(key, None)
+            if section == "routes":
+                for key in list(st.session_state):
+                    if key.startswith("routes_page_operation_editor_"):
+                        st.session_state.pop(key, None)
             session_history(st.session_state).clear_section(section)
-            st.session_state.current_page = requested
-            st.session_state.pending_navigation = False
+            if section == "routes":
+                session_history(st.session_state).clear_section("operations")
+            st.session_state[f"{section}_dirty"] = False
+            complete_pending_navigation(st.session_state)
             st.rerun()
 
     if page == "Реестр заказов":

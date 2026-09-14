@@ -50,8 +50,10 @@ def commit_all_session_drafts(*, sections: set[str] | None = None, message_targe
             history = session_history(st.session_state)
             for section in selected_sections:
                 history.clear_section(section)
+                st.session_state[f"{section}_dirty"] = False
                 if section == "routes":
                     history.clear_section("operations")
+                    st.session_state["routes_dirty"] = False
             # Clear before rerun: Streamlit aborts execution at st.rerun().
             section_keys = {
                 "orders": {"orders_draft_rows", "orders_page_editor", "orders_page_editor_source_version",
@@ -79,6 +81,8 @@ def commit_all_session_drafts(*, sections: set[str] | None = None, message_targe
                             "orders_component_flush_request", "orders_recalculation_requested"):
                     st.session_state.pop(key, None)
             st.session_state["draft_flash"] = (success_flash(result.summary) if result.summary else "Изменения сохранены без пересчёта плана.")
+            if st.session_state.get("pending_navigation_commit"):
+                st.session_state["pending_navigation_commit_completed"] = True
             st.rerun()
             return True
         target = message_target or st.sidebar

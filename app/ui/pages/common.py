@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from app.db.database import SessionLocal
 from app.db.models import Order, PlanningConflict, RecalculationRun
 from app.services.bootstrap_service import initialize_database, load_demo_data
+from app.services.draft_history_service import section_is_dirty
 
 
 def _render_plan_status(host) -> None:
@@ -30,15 +31,11 @@ def _render_plan_status(host) -> None:
         # Never let the status strip break the shell (e.g. empty DB on first run).
         return
 
-    has_pending_edits = any(
-        st.session_state.get(key)
-        for key in (
-            "orders_draft_rows_dirty",
-            "routes_draft_rows",
-            "route_operations_drafts_by_route_id",
-            "work_centers_draft_rows",
-            "orders_recalculation_requested",
-        )
+    has_pending_edits = bool(
+        st.session_state.get("orders_draft_rows_dirty")
+        or section_is_dirty(st.session_state, "routes")
+        or section_is_dirty(st.session_state, "work_centers")
+        or st.session_state.get("orders_recalculation_requested")
     )
 
     if last_run is None or last_run.finished_at is None:

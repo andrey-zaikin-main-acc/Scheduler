@@ -120,7 +120,7 @@ def draft_table(rows: list[dict[str, Any]], *, key: str, read_only: list[str] | 
         st.session_state[f"{key}_visual_event"] = result_events[-1]
         business_events = [event for event in result_events if event.kind != "selection"]
         if business_events and not st.session_state.get("draft_history_replay_in_progress"):
-            from app.services.draft_history_service import DraftAction, session_history
+            from app.services.draft_history_service import DraftAction, mark_section_dirty, session_history
             section = ("orders" if key.startswith("orders_page") else
                        "operations" if "operation_editor" in key else
                        "routes" if key.startswith("routes_page") else "work_centers")
@@ -132,6 +132,7 @@ def draft_table(rows: list[dict[str, Any]], *, key: str, read_only: list[str] | 
                     "route_operations_drafts_by_route_id" if section == "operations" else
                     f"{section}_draft_rows")},
             ))
+            mark_section_dirty(st.session_state, section)
     _render_replay_focus(key, edited)
     return DraftTableResult(edited, result_events)
 
