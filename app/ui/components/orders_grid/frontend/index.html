@@ -10,6 +10,8 @@ input:focus,select:focus{outline:2px solid var(--primary);outline-offset:0}
 input[type=checkbox]{min-width:18px;width:18px;accent-color:var(--primary)}
 .readonly{background:color-mix(in srgb,var(--secondary-background) 45%,var(--background));color:color-mix(in srgb,var(--text) 72%,var(--background))}
 .readonly-display{display:block;padding:4px;min-height:26px}.readonly input[type=checkbox]{background:transparent;opacity:1;cursor:default}.date{min-width:130px}
+th.col-editable{border-left:3px solid var(--primary)}td.col-editable{border-left:3px solid color-mix(in srgb,var(--primary) 45%,var(--background))}
+th.col-locked{color:color-mix(in srgb,var(--text) 62%,var(--background));font-style:italic}
 </style></head><body><div id="grid"></div><script src="model.js"></script><script src="view.js"></script><script>
 const M=OrdersGridModel,V=OrdersGridView;let state=null,args=null;
 function post(type,data){parent.postMessage(Object.assign({isStreamlitMessage:true,type},data||{}),"*")}
@@ -31,8 +33,9 @@ function makeRenderer(row,field){
 function applyTheme(theme){for(const [name,value] of Object.entries(V.themeVars(theme)))document.documentElement.style.setProperty(name,value)}
 function draw(){const host=document.getElementById("grid"),old=host.querySelector(".viewport");if(old){state.scrollTop=old.scrollTop;state.scrollLeft=old.scrollLeft}
   host.textContent="";const viewport=document.createElement("div");viewport.className="viewport";const table=document.createElement("table"),head=document.createElement("thead"),hr=document.createElement("tr");
-  for(const field of args.columns){const th=document.createElement("th");th.textContent=field;hr.appendChild(th)}head.appendChild(hr);table.appendChild(head);const body=document.createElement("tbody");
-  for(const row of state.rows){const tr=document.createElement("tr"),key=M.rowKey(row);for(const field of args.columns){const td=document.createElement("td"),readOnly=(args.read_only||[]).includes(field);if(readOnly)td.className="readonly";td.dataset.kind=V.cellKind(field,readOnly,(args.options||{})[field]);td.appendChild(readOnly?makeRenderer(row,field):makeEditor(row,field,key));tr.appendChild(td)}body.appendChild(tr)}table.appendChild(body);viewport.appendChild(table);host.appendChild(viewport);viewport.scrollTop=state.scrollTop;viewport.scrollLeft=state.scrollLeft;
+  const readOnlyFields=(args.read_only||[]);const accentField=f=>!readOnlyFields.includes(f)&&f!=="Выбран";
+  for(const field of args.columns){const th=document.createElement("th");const locked=readOnlyFields.includes(field);th.textContent=locked?("🔒 "+field):field;if(locked)th.className="col-locked";else if(accentField(field))th.className="col-editable";hr.appendChild(th)}head.appendChild(hr);table.appendChild(head);const body=document.createElement("tbody");
+  for(const row of state.rows){const tr=document.createElement("tr"),key=M.rowKey(row);for(const field of args.columns){const td=document.createElement("td"),readOnly=readOnlyFields.includes(field);if(readOnly)td.className="readonly";else if(accentField(field))td.className="col-editable";td.dataset.kind=V.cellKind(field,readOnly,(args.options||{})[field]);td.appendChild(readOnly?makeRenderer(row,field):makeEditor(row,field,key));tr.appendChild(td)}body.appendChild(tr)}table.appendChild(body);viewport.appendChild(table);host.appendChild(viewport);viewport.scrollTop=state.scrollTop;viewport.scrollLeft=state.scrollLeft;
   if(state.active){const el=viewport.querySelector(`[data-key="${state.active.key}"][data-field="${CSS.escape(state.active.field)}"]`);if(el){el.focus({preventScroll:true});if(state.draftValue!==null)el.value=state.draftValue}}
   requestAnimationFrame(()=>post("streamlit:setFrameHeight",{height:V.frameHeight(viewport)}))}
 window.addEventListener("message",event=>{if(event.data.type!=="streamlit:render")return;args=event.data.args;applyTheme(event.data.theme);if(!state)state=M.create(args.rows,args.source_version);else state=M.render(state,args);draw();if(args.flush_token)value(args.flush_token)});

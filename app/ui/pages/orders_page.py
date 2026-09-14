@@ -75,11 +75,24 @@ def render_orders_page() -> None:
         route_by_name = {route.name: route for route in all_routes}
         # OrdersRepository is the single source of the persisted planning order.
         orders = OrdersRepository(session).list_orders()
-        _render_route_capacity_check(session, routes)
-        if st.button("Новый заказ", disabled=not routes, key="show_add_order"):
+        action_col, capacity_col = st.columns(2)
+        if action_col.button("Новый заказ", disabled=not routes, key="show_add_order", use_container_width=True):
             st.session_state[DRAFT_ORDER_SESSION_KEY] = True
+        if capacity_col.button(
+            "📐 Проверка тиража и слотов",
+            key="toggle_capacity_check",
+            use_container_width=True,
+        ):
+            st.session_state["orders_show_capacity"] = not st.session_state.get("orders_show_capacity", False)
+        if st.session_state.get("orders_show_capacity"):
+            with st.container(border=True):
+                _render_route_capacity_check(session, routes)
         if st.session_state.get(DRAFT_ORDER_SESSION_KEY):
-            _render_new_order_form(session, OrdersRepository(session), routes, route_by_name)
+            _new_order_dialog(session, OrdersRepository(session), routes, route_by_name)
+        st.caption(
+            "Столбцы с редактируемыми данными доступны для ввода. "
+            "Столбцы с замком 🔒 — расчётные, доступны только для чтения."
+        )
 
         if "orders_draft_rows" not in st.session_state:
             st.session_state.orders_draft_rows = build_order_editor_rows(orders, selected_order_id=None, include_draft=False)
@@ -166,13 +179,28 @@ def _new_order_state() -> dict[str, Any]:
     return state
 
 
+def _close_new_order_dialog() -> None:
+    """Reset the drawer flag when the modal is dismissed (X / ESC / backdrop)."""
+    st.session_state[DRAFT_ORDER_SESSION_KEY] = False
+
+
+@st.dialog("Новый заказ", on_dismiss=_close_new_order_dialog)
+def _new_order_dialog(
+    session,
+    repository: OrdersRepository,
+    routes: list[Route],
+    route_by_name: dict[str, Route],
+) -> None:
+    """Present the existing new-order form inside a modal drawer."""
+    _render_new_order_form(session, repository, routes, route_by_name)
+
+
 def _render_new_order_form(
     session,
     repository: OrdersRepository,
     routes: list[Route],
     route_by_name: dict[str, Route],
 ) -> None:
-    st.subheader("Новый заказ")
     state = _new_order_state()
     c1, c2, c3 = st.columns(3)
     state["order_number"] = c1.text_input(

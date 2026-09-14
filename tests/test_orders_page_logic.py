@@ -656,7 +656,7 @@ def test_only_global_recalculation_button_remains() -> None:
         for path in ("app/ui/navigation.py", "app/ui/pages/orders_page.py", "app/ui/pages/common.py")
     )
     assert "Сохранить все изменения и пересчитать план" not in sources
-    assert sources.count('st.button("Пересчитать план")') == 1
+    assert sources.count('"Пересчитать план"') == 1
 
 
 def test_calculated_dates_are_read_only_and_child_fields_are_hidden() -> None:

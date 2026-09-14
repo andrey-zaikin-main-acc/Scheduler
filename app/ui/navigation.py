@@ -14,10 +14,31 @@ from app.ui.pages.routes_page import render_routes_page
 from app.ui.pages.work_centers_page import render_work_centers_page
 from app.services.draft_history_service import redo_session, session_history, undo_session
 
-PAGES = [
-    "Реестр заказов", "Маршруты", "Участки", "Производственный план",
-    "Свободные слоты", "Диаграмма Ганта", "Конфликты", "Результаты пересчёта",
+# Sidebar navigation grouped by purpose: source data the user edits versus the
+# planning results produced by a recalculation.  PAGES keeps the original flat
+# order/membership so the rest of the shell and tests stay unchanged.
+DATA_PAGES = ["Реестр заказов", "Маршруты", "Участки"]
+RESULT_PAGES = [
+    "Производственный план", "Свободные слоты", "Диаграмма Ганта",
+    "Конфликты", "Результаты пересчёта",
 ]
+PAGES = DATA_PAGES + RESULT_PAGES
+
+
+def _on_nav_data() -> None:
+    """Keep a single active page when the «Данные» group is used."""
+    choice = st.session_state.get("nav_group_data")
+    if choice:
+        st.session_state["nav_group_plan"] = None
+        st.session_state["navigation_requested"] = choice
+
+
+def _on_nav_plan() -> None:
+    """Keep a single active page when the «План и результаты» group is used."""
+    choice = st.session_state.get("nav_group_plan")
+    if choice:
+        st.session_state["nav_group_data"] = None
+        st.session_state["navigation_requested"] = choice
 
 
 def request_navigation(state, requested: str, *, dirty: bool) -> str:
@@ -40,8 +61,29 @@ def render_navigation() -> None:
     st.title("Production Planner MVP")
     st.caption("Локальный прототип планирования производства с SQLite")
     current = st.session_state.setdefault("current_page", PAGES[0])
-    st.session_state.setdefault("navigation_page", current)
-    requested = st.sidebar.radio("Раздел", PAGES, key="navigation_page")
+
+    # Reserve a slot at the very top of the sidebar for the plan status and the
+    # primary «Пересчитать план» action.  It is filled later (after the page has
+    # rendered) so the two-phase recalculation barrier keeps its exact timing.
+    planning_slot = st.sidebar.container()
+
+    # Two grouped radios ("Данные" / "План и результаты") that behave as one
+    # selector: picking a page in either group deselects the other via callbacks.
+    if "nav_group_data" not in st.session_state:
+        st.session_state["nav_group_data"] = current if current in DATA_PAGES else None
+    if "nav_group_plan" not in st.session_state:
+        st.session_state["nav_group_plan"] = current if current in RESULT_PAGES else None
+    st.sidebar.markdown("**Данные**")
+    st.sidebar.radio(
+        "Данные", DATA_PAGES, key="nav_group_data",
+        on_change=_on_nav_data, label_visibility="collapsed",
+    )
+    st.sidebar.markdown("**План и результаты**")
+    st.sidebar.radio(
+        "План и результаты", RESULT_PAGES, key="nav_group_plan",
+        on_change=_on_nav_plan, label_visibility="collapsed",
+    )
+    requested = st.session_state.pop("navigation_requested", current)
     dirty = bool(st.session_state.get("routes_draft_rows") or st.session_state.get("route_operations_drafts_by_route_id")) if current == "Маршруты" else bool(st.session_state.get("work_centers_draft_rows"))
     page = request_navigation(st.session_state, requested, dirty=dirty)
     if st.session_state.get("pending_navigation"):
@@ -81,8 +123,10 @@ def render_navigation() -> None:
     # The page must first capture data_editor's value and record its action.
     render_history_controls()
     # Process save/recalculation only after the active page captured the latest
-    # widget value into its screen draft.
-    render_bootstrap_controls()
+    # widget value into its screen draft.  The planning controls are drawn into
+    # the reserved top slot so the prominent «Пересчитать план» action and plan
+    # status appear above navigation without changing when this code executes.
+    render_bootstrap_controls(planning_slot)
 
 
 def render_history_controls() -> None:
