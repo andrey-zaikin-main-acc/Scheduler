@@ -59,6 +59,27 @@ class DraftHistory:
 HISTORY_SESSION_KEY = "draft_history"
 
 
+def dirty_key(section: str) -> str:
+    """Return the public dirty flag for an editable reference section."""
+    return "routes_dirty" if section in {"routes", "operations"} else f"{section}_dirty"
+
+
+def mark_section_dirty(state: Any, section: str) -> None:
+    """Mark a section after a business edit (selection is deliberately excluded)."""
+    state[dirty_key(section)] = True
+
+
+def section_is_dirty(state: Any, section: str) -> bool:
+    """Report real edits, never the mere presence of a loaded draft snapshot."""
+    return bool(state.get(dirty_key(section), False))
+
+
+def _sync_dirty_from_history(state: Any, section: str) -> None:
+    related = {"routes", "operations"} if section in {"routes", "operations"} else {section}
+    history = session_history(state)
+    state[dirty_key(section)] = any(action.section in related for action in history.undo_stack)
+
+
 def session_history(state: Any) -> DraftHistory:
     """Return the one history shared by every editable screen in a session."""
     if HISTORY_SESSION_KEY not in state:
@@ -114,6 +135,7 @@ def apply_action(state: Any, action: DraftAction, *, undo: bool) -> None:
         "after": deepcopy(action.after),
         "undo": undo,
     }
+    _sync_dirty_from_history(state, action.section)
 SECTION_PAGES = {
     "orders": "Реестр заказов",
     "routes": "Маршруты",
