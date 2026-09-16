@@ -1,4 +1,4 @@
-"""Safe whole-database exchange for DrawPPT desktop installations."""
+"""Safe whole-database exchange with Windows-safe atomic file replacement."""
 
 from __future__ import annotations
 
