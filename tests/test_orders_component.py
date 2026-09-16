@@ -137,3 +137,23 @@ def test_flush_snapshot_decodes_date_before_bundle_creation():
         "snapshot": [{"_draft_id": -1, "Заданная дата отгрузки": "2026-08-12", "Выбран": False, "Тираж": 1000}]})
     assert rows[0]["Заданная дата отгрузки"] == date(2026, 8, 12)
     assert state["orders_component_flush_ack"] == "token"
+
+
+def test_active_cell_flush_snapshot_is_recorded_as_unsaved_change():
+    state = {"orders_draft_rows": [
+        {"ID": 7, "Клиент": "До редактирования", "Выбран": False}
+    ]}
+
+    rows = apply_component_payload(state, {
+        "client_revision": 0,
+        "events": [],
+        "flush_ack": "export-token",
+        "snapshot": [{"ID": 7, "Клиент": "Активное значение", "Выбран": False}],
+    })
+
+    assert rows[0]["Клиент"] == "Активное значение"
+    assert state["orders_component_flush_ack"] == "export-token"
+    action = session_history(state).undo_stack[-1]
+    assert action.section == "orders"
+    assert action.action_type == "snapshot"
+    assert action.fields == ("Клиент",)

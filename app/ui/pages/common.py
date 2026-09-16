@@ -26,6 +26,10 @@ _TRANSFER_ACTION_KEY = "database_transfer_action"
 _TRANSFER_PROBE_KEY = "database_transfer_probe_pending"
 _TRANSFER_SELECTED_FILE_KEY = "database_transfer_selected_file"
 _TRANSFER_CONFIRM_ROLLBACK_KEY = "database_transfer_confirm_rollback"
+_UNSAVED_EXPORT_MESSAGE = (
+    "Есть несохранённые изменения. Нажмите «Пересчитать план», дождитесь "
+    "сохранения изменений и повторите выгрузку."
+)
 
 
 def _has_unsaved_changes(state) -> bool:
@@ -117,10 +121,13 @@ def _perform_pending_transfer_action() -> None:
     _clear_transfer_probe()
     if _has_unsaved_changes(st.session_state):
         st.session_state.pop(_TRANSFER_ACTION_KEY, None)
-        _set_transfer_flash(
-            "error",
-            "Есть несохранённые изменения. Сначала сохраните их, затем повторите действие.",
-        )
+        if action == "export":
+            _set_transfer_flash("error", _UNSAVED_EXPORT_MESSAGE)
+        else:
+            _set_transfer_flash(
+                "error",
+                "Есть несохранённые изменения. Сначала сохраните их, затем повторите действие.",
+            )
         return
     try:
         if action == "export":
@@ -185,7 +192,12 @@ def _render_database_transfer_controls() -> None:
     _perform_pending_transfer_action()
     _render_transfer_flash()
 
-    st.text_input(
+    # Use the value returned by the widget in this render.  Reading the key
+    # back from session_state here can observe its previous value during a
+    # widget-triggered rerun: the browser already displays the submitted text,
+    # while the button is consequently built as disabled.  The widget key
+    # remains the single persistent source for subsequent reruns/navigation.
+    author = st.text_input(
         "Автор выгрузки",
         key="database_transfer_author",
         placeholder="Например: Андрей Заикин",
@@ -193,7 +205,7 @@ def _render_database_transfer_controls() -> None:
     if st.button(
         "Выгрузить актуальные данные",
         use_container_width=True,
-        disabled=not st.session_state.get("database_transfer_author", "").strip(),
+        disabled=not author.strip(),
     ):
         _start_transfer_probe("export")
     if st.button("Загрузить актуальные данные", use_container_width=True):
