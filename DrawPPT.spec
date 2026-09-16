@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_dyn
 
 block_cipher = None
 
-hiddenimports = []
+hiddenimports = ['tkinter', 'tkinter.filedialog']
 datas = [('app', 'app')]
 binaries = []
 

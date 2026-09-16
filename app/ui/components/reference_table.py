@@ -164,6 +164,15 @@ def request_reference_navigation_probe(
     )
 
 
+def request_reference_transfer_probe(
+    state: Any, *, section: str, editor_keys: list[str]
+) -> str:
+    """Flush visible grids before a whole-database import/export action."""
+    return _request_reference_flush(
+        state, section=section, editor_keys=editor_keys, kind="database_transfer_probe"
+    )
+
+
 def reference_save_ready(state: Any, section: str) -> bool:
     token = state.get("reference_tables_flush_request")
     return bool(
