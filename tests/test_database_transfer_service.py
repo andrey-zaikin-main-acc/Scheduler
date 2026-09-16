@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import os
 from datetime import datetime, timezone
 
 import pytest
@@ -14,6 +15,7 @@ from app.services.database_transfer_service import (
     rollback_last_import,
     validate_transfer_file,
 )
+from app.services import database_transfer_service
 
 
 def _database(path, label: str) -> None:
@@ -63,6 +65,41 @@ def test_same_extension_sqlite_without_drawppt_marker_is_rejected(tmp_path) -> N
 
     with pytest.raises(DatabaseTransferError, match="служебная метка"):
         validate_transfer_file(unrelated)
+
+
+def test_export_closes_sqlite_handles_before_atomic_rename(tmp_path, monkeypatch) -> None:
+    """Regression: Windows rejects os.replace while any SQLite handle is open."""
+    current = tmp_path / "planner.sqlite3"
+    _database(current, "saved plan")
+    connections = []
+    real_connect = sqlite3.connect
+    real_replace = os.replace
+
+    class TrackingConnection(sqlite3.Connection):
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+            super().close()
+
+    def tracking_connect(*args, **kwargs):
+        kwargs["factory"] = TrackingConnection
+        connection = real_connect(*args, **kwargs)
+        connections.append(connection)
+        return connection
+
+    def guarded_replace(source, destination):
+        assert connections
+        assert all(connection.closed for connection in connections)
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(database_transfer_service.sqlite3, "connect", tracking_connect)
+    monkeypatch.setattr(database_transfer_service.os, "replace", guarded_replace)
+
+    exported = export_database(tmp_path, "Андрей", source_path=current)
+
+    assert exported.is_file()
+    assert all(connection.closed for connection in connections)
 
 
 def test_import_replaces_everything_and_persistent_one_step_rollback_restores(tmp_path) -> None:

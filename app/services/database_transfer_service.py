@@ -1,4 +1,4 @@
-"""Safe whole-database exchange for DrawPPT desktop installations."""
+"""Safe whole-database exchange with Windows-safe atomic file replacement."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 import unicodedata
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -172,7 +173,11 @@ def validate_transfer_file(
             f"Нужен файл выгрузки DrawPPT с расширением {TRANSFER_EXTENSION}."
         )
     try:
-        with _connect_read_only(candidate) as connection:
+        # sqlite3.Connection's context manager commits/rolls back but does not
+        # close the handle.  Explicit closing is essential on Windows because
+        # an open read handle prevents the validated temporary file from being
+        # atomically renamed into its final export name.
+        with closing(_connect_read_only(candidate)) as connection:
             _check_database_integrity(connection)
             _validate_schema(connection)
             metadata = _read_metadata(connection)
@@ -190,7 +195,7 @@ def validate_transfer_file(
 def _stamp_metadata(
     path: Path, *, kind: str, author: str, created_at: datetime
 ) -> None:
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         connection.execute(f'DROP TABLE IF EXISTS "{METADATA_TABLE}"')
         connection.execute(f'''CREATE TABLE "{METADATA_TABLE}" (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -220,8 +225,8 @@ def _copy_sqlite_database(source: Path, destination: Path) -> None:
     if not source.is_file():
         raise DatabaseTransferError("Текущая база данных DrawPPT не найдена.")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with _connect_read_only(source) as source_connection:
-        with sqlite3.connect(destination) as destination_connection:
+    with closing(_connect_read_only(source)) as source_connection:
+        with closing(sqlite3.connect(destination)) as destination_connection:
             source_connection.backup(destination_connection)
 
 
@@ -275,7 +280,7 @@ def _validate_live_database(path: Path) -> None:
     if not path.is_file():
         raise DatabaseTransferError("Текущая база данных DrawPPT не найдена.")
     try:
-        with _connect_read_only(path) as connection:
+        with closing(_connect_read_only(path)) as connection:
             _check_database_integrity(connection)
             _validate_schema(connection)
     except DatabaseTransferError:
