@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 from streamlit.testing.v1 import AppTest
@@ -22,7 +23,7 @@ def test_database_transfer_controls_replace_old_bootstrap_buttons() -> None:
     assert export_button.disabled
 
 
-def test_any_draft_history_action_blocks_database_transfer() -> None:
+def test_any_draft_history_action_is_still_detected_for_protected_operations() -> None:
     state = {}
     session_history(state).record(DraftAction("orders", "cell", [], []))
 
@@ -63,13 +64,35 @@ def test_nonempty_author_enables_export_and_survives_rerun() -> None:
         if button.label == "Выгрузить актуальные данные"
     ).disabled
 
+    # Draft changes and component-originated reruns affect neither the durable
+    # author nor export availability.
+    app.session_state["orders_draft_rows_dirty"] = True
+    app.session_state["orders_component_ack_revision"] = 42
+    app.run()
+    assert app.session_state["database_transfer_author"] == "Иван Петров"
+    assert not next(
+        button for button in app.button
+        if button.label == "Выгрузить актуальные данные"
+    ).disabled
 
-def test_export_disabled_uses_value_displayed_by_text_input(monkeypatch) -> None:
-    """Regression for a widget rerun whose session mapping is one render behind."""
+
+def test_whitespace_author_keeps_export_disabled() -> None:
+    app = AppTest.from_file("app/main.py", default_timeout=20).run()
+    author = next(field for field in app.text_input if field.label == "Автор выгрузки")
+
+    author.set_value("   \t").run()
+
+    assert next(
+        button for button in app.button
+        if button.label == "Выгрузить актуальные данные"
+    ).disabled
+
+
+def test_author_widget_is_restored_from_persistent_state(monkeypatch) -> None:
     buttons = []
     fake_st = SimpleNamespace(
-        session_state={"database_transfer_author": ""},
-        text_input=lambda *args, **kwargs: "Автор из браузера",
+        session_state={"database_transfer_author": "Автор из состояния"},
+        text_input=lambda *args, **kwargs: None,
         button=lambda label, **kwargs: buttons.append((label, kwargs)) or False,
     )
     monkeypatch.setattr(common, "st", fake_st)
@@ -79,30 +102,61 @@ def test_export_disabled_uses_value_displayed_by_text_input(monkeypatch) -> None
 
     common._render_database_transfer_controls()
 
-    export = next(kwargs for label, kwargs in buttons if label == "Выгрузить актуальные данные")
+    export = next(
+        kwargs for label, kwargs in buttons
+        if label == "Выгрузить актуальные данные"
+    )
     assert export["disabled"] is False
+    assert (
+        fake_st.session_state["database_transfer_author_input"]
+        == "Автор из состояния"
+    )
 
 
-def test_unsaved_export_does_not_open_directory_picker(monkeypatch) -> None:
+def test_unsaved_export_opens_picker_and_exports_persisted_database(
+    monkeypatch, tmp_path
+) -> None:
     state = {
         "database_transfer_author": "Иван Петров",
-        "database_transfer_action": "export",
-        "database_transfer_probe_pending": True,
-        "database_transfer_probe_completed": True,
+        "orders_draft_rows": [{"number": "НЕСОХРАНЕННЫЙ ЧЕРНОВИК"}],
+        "orders_recalculation_requested": True,
+        "reference_tables_save_requested": True,
     }
     fake_st = SimpleNamespace(session_state=state)
     monkeypatch.setattr(common, "st", fake_st)
+    picker_calls = []
+    export_calls = []
     monkeypatch.setattr(
-        common, "choose_export_directory",
-        lambda: (_ for _ in ()).throw(AssertionError("directory picker must not open")),
+        common,
+        "choose_export_directory",
+        lambda: picker_calls.append(True) or tmp_path,
+    )
+    monkeypatch.setattr(
+        common,
+        "export_database",
+        lambda directory, author: export_calls.append((directory, author))
+        or Path("snapshot.drawppt"),
     )
     session_history(state).record(DraftAction("orders", "cell", [], []))
 
-    common._perform_pending_transfer_action()
+    common._export_current_database("Иван Петров")
 
+    assert picker_calls == [True]
+    assert export_calls == [(tmp_path, "Иван Петров")]
+    assert state["orders_draft_rows"] == [{"number": "НЕСОХРАНЕННЫЙ ЧЕРНОВИК"}]
+    assert state["orders_recalculation_requested"] is True
     assert state["database_transfer_flash"] == (
-        "error",
-        "Есть несохранённые изменения. Нажмите «Пересчитать план», дождитесь "
-        "сохранения изменений и повторите выгрузку.",
+        "success",
+        "Данные выгружены: snapshot.drawppt",
     )
-    assert "database_transfer_action" not in state
+
+
+def test_successful_export_preserves_author(monkeypatch, tmp_path) -> None:
+    state = {"database_transfer_author": "Иван Петров"}
+    monkeypatch.setattr(common, "st", SimpleNamespace(session_state=state))
+    monkeypatch.setattr(common, "choose_export_directory", lambda: tmp_path)
+    monkeypatch.setattr(common, "export_database", lambda *_: Path("snapshot.drawppt"))
+
+    common._export_current_database(state["database_transfer_author"])
+
+    assert state["database_transfer_author"] == "Иван Петров"
