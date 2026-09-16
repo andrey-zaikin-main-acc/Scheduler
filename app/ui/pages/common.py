@@ -1,5 +1,6 @@
 """Common Streamlit page helpers."""
 
+from datetime import UTC, datetime, tzinfo
 from uuid import uuid4
 
 import streamlit as st
@@ -28,6 +29,26 @@ _TRANSFER_SELECTED_FILE_KEY = "database_transfer_selected_file"
 _TRANSFER_CONFIRM_ROLLBACK_KEY = "database_transfer_confirm_rollback"
 _TRANSFER_AUTHOR_KEY = "database_transfer_author"
 _TRANSFER_AUTHOR_WIDGET_KEY = "database_transfer_author_input"
+
+
+def format_recalculation_time(
+    value: datetime, *, local_timezone: tzinfo | None = None
+) -> str:
+    """Format a stored recalculation timestamp in the computer's local time.
+
+    SQLite currently returns the persisted UTC timestamps without timezone
+    information.  A timezone-aware value is also accepted so a future change
+    in database handling cannot apply the UTC offset twice.  ``local_timezone``
+    is an explicit test seam; production callers leave it unset so
+    :meth:`datetime.astimezone` discovers the host computer's timezone.
+    """
+    utc_value = value.replace(tzinfo=UTC) if value.tzinfo is None else value
+    local_value = (
+        utc_value.astimezone()
+        if local_timezone is None
+        else utc_value.astimezone(local_timezone)
+    )
+    return local_value.strftime("%d.%m.%Y %H:%M")
 
 
 def _has_unsaved_changes(state) -> bool:
@@ -310,7 +331,9 @@ def _render_plan_status(host) -> None:
         host.success("План: актуален")
 
     if last_run is not None and last_run.finished_at is not None:
-        host.caption(f"Последний пересчёт: {last_run.finished_at.strftime('%d.%m.%Y %H:%M')}")
+        host.caption(
+            f"Последний пересчёт: {format_recalculation_time(last_run.finished_at)}"
+        )
 
     if conflict_count:
         host.caption(f"⚠️ Конфликтов планирования: {conflict_count}")
