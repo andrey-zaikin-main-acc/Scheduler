@@ -89,7 +89,28 @@ def apply_component_payload(state: Any, payload: dict[str, Any] | None, *,
     # including a change event delivered in the same browser turn as the click.
     if payload.get("flush_ack") and payload.get("snapshot"):
         snapshot = [_decode_row(dict(row)) for row in payload["snapshot"]]
-        rows = postprocess(rows, snapshot) if postprocess is not None else snapshot
+        reconciled = postprocess(rows, snapshot) if postprocess is not None else snapshot
+        # The browser snapshot is authoritative at a flush barrier.  Normally
+        # the matching change event was handled above, but an input that is
+        # still active when the export/recalculation button is clicked can
+        # arrive only in this snapshot.  Record that business difference so a
+        # database transfer cannot silently export the older SQLite value.
+        business_fields: set[str] = set()
+        old_by_key = {stable_row_key(row): row for row in rows}
+        for row in reconciled:
+            old = old_by_key.get(stable_row_key(row), {})
+            business_fields.update(
+                field for field, value in row.items()
+                if field not in {"Выбран", "_draft_id"} and old.get(field) != value
+            )
+        if business_fields and not state.get("draft_history_replay_in_progress"):
+            session_history(state).record(DraftAction(
+                "orders", "snapshot", deepcopy(rows), deepcopy(reconciled),
+                tuple(stable_row_key(row) for row in reconciled),
+                tuple(sorted(business_fields)),
+                focus={"session_key": "orders_draft_rows"},
+            ))
+        rows = reconciled
         state["orders_component_flush_ack"] = payload["flush_ack"]
     state["orders_component_ack_revision"] = max(ack, int(payload.get("client_revision", ack)))
     state["orders_draft_rows"] = rows
