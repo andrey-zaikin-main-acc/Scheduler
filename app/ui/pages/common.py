@@ -26,10 +26,8 @@ _TRANSFER_ACTION_KEY = "database_transfer_action"
 _TRANSFER_PROBE_KEY = "database_transfer_probe_pending"
 _TRANSFER_SELECTED_FILE_KEY = "database_transfer_selected_file"
 _TRANSFER_CONFIRM_ROLLBACK_KEY = "database_transfer_confirm_rollback"
-_UNSAVED_EXPORT_MESSAGE = (
-    "Есть несохранённые изменения. Нажмите «Пересчитать план», дождитесь "
-    "сохранения изменений и повторите выгрузку."
-)
+_TRANSFER_AUTHOR_KEY = "database_transfer_author"
+_TRANSFER_AUTHOR_WIDGET_KEY = "database_transfer_author_input"
 
 
 def _has_unsaved_changes(state) -> bool:
@@ -46,6 +44,38 @@ def _has_unsaved_changes(state) -> bool:
 
 def _set_transfer_flash(level: str, message: str) -> None:
     st.session_state["database_transfer_flash"] = (level, message)
+
+
+def _sync_transfer_author() -> None:
+    """Copy the transient widget value into persistent application state."""
+    st.session_state[_TRANSFER_AUTHOR_KEY] = st.session_state.get(
+        _TRANSFER_AUTHOR_WIDGET_KEY, ""
+    )
+
+
+def _restore_transfer_author_widget() -> str:
+    """Restore a recreated text widget and return the persistent author."""
+    state = st.session_state
+    if _TRANSFER_AUTHOR_KEY not in state:
+        state[_TRANSFER_AUTHOR_KEY] = state.get(_TRANSFER_AUTHOR_WIDGET_KEY, "")
+    if _TRANSFER_AUTHOR_WIDGET_KEY not in state:
+        state[_TRANSFER_AUTHOR_WIDGET_KEY] = state[_TRANSFER_AUTHOR_KEY]
+    return state[_TRANSFER_AUTHOR_KEY]
+
+
+def _export_current_database(author: str) -> None:
+    """Export the persisted SQLite snapshot without inspecting UI drafts."""
+    try:
+        directory = choose_export_directory()
+        if directory is None:
+            _set_transfer_flash("info", "Выгрузка отменена.")
+        else:
+            path = export_database(directory, author)
+            _set_transfer_flash("success", f"Данные выгружены: {path.name}")
+    except (DatabaseTransferError, OSError) as exc:
+        _set_transfer_flash("error", str(exc))
+    except Exception as exc:
+        _set_transfer_flash("error", f"Операция с данными не выполнена: {exc}")
 
 
 def _clear_transfer_probe() -> None:
@@ -121,26 +151,13 @@ def _perform_pending_transfer_action() -> None:
     _clear_transfer_probe()
     if _has_unsaved_changes(st.session_state):
         st.session_state.pop(_TRANSFER_ACTION_KEY, None)
-        if action == "export":
-            _set_transfer_flash("error", _UNSAVED_EXPORT_MESSAGE)
-        else:
-            _set_transfer_flash(
-                "error",
-                "Есть несохранённые изменения. Сначала сохраните их, затем повторите действие.",
-            )
+        _set_transfer_flash(
+            "error",
+            "Есть несохранённые изменения. Сначала сохраните их, затем повторите действие.",
+        )
         return
     try:
-        if action == "export":
-            directory = choose_export_directory()
-            if directory is None:
-                _set_transfer_flash("info", "Выгрузка отменена.")
-            else:
-                path = export_database(
-                    directory,
-                    st.session_state.get("database_transfer_author", ""),
-                )
-                _set_transfer_flash("success", f"Данные выгружены: {path.name}")
-        elif action == "select_import":
+        if action == "select_import":
             path = choose_import_file()
             if path is None:
                 _set_transfer_flash("info", "Выбор файла отменён.")
@@ -192,22 +209,20 @@ def _render_database_transfer_controls() -> None:
     _perform_pending_transfer_action()
     _render_transfer_flash()
 
-    # Use the value returned by the widget in this render.  Reading the key
-    # back from session_state here can observe its previous value during a
-    # widget-triggered rerun: the browser already displays the submitted text,
-    # while the button is consequently built as disabled.  The widget key
-    # remains the single persistent source for subsequent reruns/navigation.
-    author = st.text_input(
+    author = _restore_transfer_author_widget()
+    st.text_input(
         "Автор выгрузки",
-        key="database_transfer_author",
+        key=_TRANSFER_AUTHOR_WIDGET_KEY,
         placeholder="Например: Андрей Заикин",
+        on_change=_sync_transfer_author,
     )
     if st.button(
         "Выгрузить актуальные данные",
         use_container_width=True,
         disabled=not author.strip(),
     ):
-        _start_transfer_probe("export")
+        _export_current_database(author)
+        _render_transfer_flash()
     if st.button("Загрузить актуальные данные", use_container_width=True):
         _start_transfer_probe("select_import")
 
