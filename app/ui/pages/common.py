@@ -333,12 +333,26 @@ def render_bootstrap_controls(planning_host=None) -> None:
         requested = st.session_state.get("orders_recalculation_requested")
         flush_request = st.session_state.get("orders_component_flush_request")
         if requested and flush_request == st.session_state.get("orders_component_flush_ack"):
+            # Claim the acknowledged barrier before committing.  A successful
+            # commit reruns the app, while a validation failure returns in this
+            # run; in either case this ACK must never be able to commit twice.
             st.session_state.pop("orders_recalculation_requested", None)
             st.session_state.pop("orders_component_flush_request", None)
             initialize_database()
             from app.ui.pages.page_utils import commit_all_session_drafts
             commit_all_session_drafts()
-        if st.button("Пересчитать план", type="primary", use_container_width=True):
+        # Re-read after handling an ACK: validation can fail without rerunning,
+        # and the user must not be left with a permanently disabled action.
+        recalculation_pending = bool(
+            st.session_state.get("orders_recalculation_requested")
+            or st.session_state.get("orders_component_flush_request")
+        )
+        if st.button(
+            "Пересчитать план",
+            type="primary",
+            use_container_width=True,
+            disabled=recalculation_pending,
+        ):
             # On the orders screen this is a two-phase internal barrier.  The
             # browser grid first returns its newest snapshot; only the following
             # run is allowed to construct DraftBundle and validate it.
@@ -346,6 +360,10 @@ def render_bootstrap_controls(planning_host=None) -> None:
                 token = uuid4().hex
                 st.session_state["orders_component_flush_request"] = token
                 st.session_state["orders_recalculation_requested"] = True
+                # The grid was rendered earlier in this Streamlit run.  Start
+                # the automatic second phase immediately so it receives the
+                # token and flushes its browser-owned active input.
+                st.rerun()
             else:
                 initialize_database()
                 from app.ui.pages.page_utils import commit_all_session_drafts
