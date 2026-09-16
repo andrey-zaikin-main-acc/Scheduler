@@ -8,6 +8,7 @@ from app.services.draft_history_service import session_history
 from app.ui.components.reference_table import (
     apply_reference_payload, clear_reference_save, reference_save_ready,
     request_reference_navigation_probe, request_reference_save,
+    request_reference_transfer_probe,
 )
 
 
@@ -89,6 +90,20 @@ def test_navigation_probe_reuses_idempotent_flush_without_becoming_save():
     assert request_reference_navigation_probe(
         state, section="routes", editor_keys=["route", "operation"]
     ) == token
+
+
+def test_database_transfer_probe_flushes_without_requesting_a_save():
+    state = {}
+    token = request_reference_transfer_probe(
+        state, section="routes", editor_keys=["route", "operation"]
+    )
+
+    assert state["reference_tables_request_kind"] == "database_transfer_probe"
+    assert "pending_navigation_commit" not in state
+    state["route_component_flush_ack"] = token
+    assert not reference_save_ready(state, "routes")
+    state["operation_component_flush_ack"] = token
+    assert reference_save_ready(state, "routes")
 
 
 def test_navigation_probe_merges_delivered_and_active_edits_without_duplicates():

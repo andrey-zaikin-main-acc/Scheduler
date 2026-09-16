@@ -75,6 +75,11 @@ def render_work_centers_page() -> None:
                 if resolve_navigation_probe(st.session_state, "work_centers"):
                     st.rerun()
                 return
+            if st.session_state.get("reference_tables_request_kind") == "database_transfer_probe":
+                clear_reference_save(st.session_state)
+                st.session_state["database_transfer_probe_completed"] = True
+                st.rerun()
+                return
             clear_reference_save(st.session_state)
             from app.ui.pages.page_utils import commit_all_session_drafts
             if commit_all_session_drafts(sections={"work_centers"}, message_target=st):
