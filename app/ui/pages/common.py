@@ -353,6 +353,12 @@ def render_bootstrap_controls(planning_host=None) -> None:
     with host:
         st.markdown("**Планирование**")
         _render_plan_status(host)
+        # Reserve both positions before processing a component ACK: an ACK can
+        # be handled before the button is actually rendered in this run.  The
+        # empty error container has no visible height, but keeps validation
+        # messages immediately after the button when they are added.
+        button_host = st.container()
+        error_host = st.container()
         requested = st.session_state.get("orders_recalculation_requested")
         flush_request = st.session_state.get("orders_component_flush_request")
         if requested and flush_request == st.session_state.get("orders_component_flush_ack"):
@@ -363,14 +369,14 @@ def render_bootstrap_controls(planning_host=None) -> None:
             st.session_state.pop("orders_component_flush_request", None)
             initialize_database()
             from app.ui.pages.page_utils import commit_all_session_drafts
-            commit_all_session_drafts()
+            commit_all_session_drafts(message_target=error_host)
         # Re-read after handling an ACK: validation can fail without rerunning,
         # and the user must not be left with a permanently disabled action.
         recalculation_pending = bool(
             st.session_state.get("orders_recalculation_requested")
             or st.session_state.get("orders_component_flush_request")
         )
-        if st.button(
+        if button_host.button(
             "Пересчитать план",
             type="primary",
             use_container_width=True,
@@ -390,7 +396,7 @@ def render_bootstrap_controls(planning_host=None) -> None:
             else:
                 initialize_database()
                 from app.ui.pages.page_utils import commit_all_session_drafts
-                commit_all_session_drafts()
+                commit_all_session_drafts(message_target=error_host)
 
     transfer_expanded = bool(
         st.session_state.get("database_transfer_flash")
