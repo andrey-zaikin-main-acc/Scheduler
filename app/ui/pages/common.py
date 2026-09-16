@@ -353,15 +353,29 @@ def render_bootstrap_controls(planning_host=None) -> None:
     with host:
         st.markdown("**Планирование**")
         _render_plan_status(host)
-        # Reserve both positions before processing a component ACK: an ACK can
-        # be handled before the button is actually rendered in this run.  The
-        # empty error container has no visible height, but keeps validation
-        # messages immediately after the button when they are added.
-        button_host = st.container()
-        error_host = st.container()
         requested = st.session_state.get("orders_recalculation_requested")
         flush_request = st.session_state.get("orders_component_flush_request")
-        if requested and flush_request == st.session_state.get("orders_component_flush_ack"):
+        flush_ack = st.session_state.get("orders_component_flush_ack")
+        ack_ready = bool(
+            requested and flush_request and flush_request == flush_ack
+        )
+        recalculation_pending = bool(
+            (requested or flush_request) and not ack_ready
+        )
+
+        # Emit the button delta before creating the message container.  Merely
+        # reserving two containers in this order is not equivalent: writing to
+        # the second container before the button itself is emitted can make
+        # Streamlit place the validation messages at the earlier delta position.
+        clicked = st.button(
+            "Пересчитать план",
+            type="primary",
+            use_container_width=True,
+            disabled=recalculation_pending,
+        )
+        error_host = st.container()
+
+        if ack_ready:
             # Claim the acknowledged barrier before committing.  A successful
             # commit reruns the app, while a validation failure returns in this
             # run; in either case this ACK must never be able to commit twice.
@@ -370,18 +384,7 @@ def render_bootstrap_controls(planning_host=None) -> None:
             initialize_database()
             from app.ui.pages.page_utils import commit_all_session_drafts
             commit_all_session_drafts(message_target=error_host)
-        # Re-read after handling an ACK: validation can fail without rerunning,
-        # and the user must not be left with a permanently disabled action.
-        recalculation_pending = bool(
-            st.session_state.get("orders_recalculation_requested")
-            or st.session_state.get("orders_component_flush_request")
-        )
-        if button_host.button(
-            "Пересчитать план",
-            type="primary",
-            use_container_width=True,
-            disabled=recalculation_pending,
-        ):
+        elif clicked:
             # On the orders screen this is a two-phase internal barrier.  The
             # browser grid first returns its newest snapshot; only the following
             # run is allowed to construct DraftBundle and validate it.
