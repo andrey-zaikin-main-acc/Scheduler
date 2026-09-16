@@ -68,6 +68,7 @@ def test_same_extension_sqlite_without_drawppt_marker_is_rejected(tmp_path) -> N
 
 
 def test_export_closes_sqlite_handles_before_atomic_rename(tmp_path, monkeypatch) -> None:
+    """Regression: Windows rejects os.replace while any SQLite handle is open."""
     current = tmp_path / "planner.sqlite3"
     _database(current, "saved plan")
     connections = []
