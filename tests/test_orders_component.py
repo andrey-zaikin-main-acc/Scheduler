@@ -6,6 +6,7 @@ from app.services.draft_history_service import session_history
 from app.ui.components import orders_component as component_module
 from app.ui.components.orders_component import (
     DATE_FIELDS,
+    ORDERS_GRID_ID,
     _encode_row,
     apply_component_payload,
     decode_value,
@@ -19,6 +20,31 @@ from app.ui.pages.common import _has_unsaved_changes
 def event(revision, key, field, before, after, action="cell"):
     return {"client_revision": revision, "row_key": key, "field": field,
             "before": before, "after": after, "action_type": action}
+
+
+def test_foreign_grid_payload_is_ignored_even_with_matching_row_and_version():
+    state = {
+        "orders_draft_rows": [{"ID": 1, "Клиент": "Заказчик", "Выбран": False}],
+        "orders_component_ack_revision": 5,
+        "orders_component_flush_request": "orders-flush",
+    }
+    payload = {
+        "grid_id": "routes_page_route_editor", "source_version": 9,
+        "client_revision": 6,
+        "events": [event(6, 1, "Выбран", False, True, "selection")],
+        "flush_ack": "orders-flush",
+        "snapshot": [{"ID": 1, "Клиент": "Маршрут", "Выбран": True}],
+    }
+
+    rows = apply_component_payload(
+        state, payload, source_version=9, grid_id=ORDERS_GRID_ID,
+        editable_fields={"Клиент", "Выбран"},
+    )
+
+    assert rows == [{"ID": 1, "Клиент": "Заказчик", "Выбран": False}]
+    assert state["orders_component_ack_revision"] == 5
+    assert "orders_component_flush_ack" not in state
+    assert not session_history(state).undo_stack
 
 
 def test_outbound_encoding_is_json_safe_and_dates_round_trip():
@@ -84,6 +110,7 @@ def test_orders_component_production_args_are_json_safe_without_mutating_draft(m
 
     assert captured["rows"][0]["Заданная дата запуска"] == "2026-08-13"
     assert captured["rows"][0]["Расчётная дата отгрузки"] == "2026-08-16"
+    assert captured["grid_id"] == ORDERS_GRID_ID
     assert result[0]["Заданная дата запуска"] == date(2026, 8, 13)
     assert state["orders_draft_rows"][0]["Расчётная дата отгрузки"] == date(2026, 8, 16)
 

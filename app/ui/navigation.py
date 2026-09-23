@@ -177,8 +177,12 @@ def render_navigation() -> None:
             )
         if no.button("Нет"):
             from app.ui.components.reference_table import clear_reference_save
+            from app.ui.pages.page_utils import advance_saved_reference_sources
             clear_reference_save(st.session_state)
             section = "routes" if current == "Маршруты" else "work_centers"
+            # Returning to SQLite after discarding is an authoritative source
+            # replacement, just like a successful save.
+            advance_saved_reference_sources(st.session_state, {section})
             discard_keys = (
                 ("routes_draft_rows", "route_operations_drafts_by_route_id",
                  "routes_page_route_editor", "routes_page_has_draft_route",
@@ -192,7 +196,8 @@ def render_navigation() -> None:
                 st.session_state.pop(key, None)
             if section == "routes":
                 for key in list(st.session_state):
-                    if key.startswith("routes_page_operation_editor_"):
+                    if (key.startswith("routes_page_operation_editor_")
+                            and not key.endswith("_source_version")):
                         st.session_state.pop(key, None)
             # A discarded browser snapshot must not leave ACK/revision state
             # that could be mistaken for a later barrier response.

@@ -43,6 +43,7 @@ def apply_reference_payload(
     focus_rows_key: str | None = None,
     postprocess: Callable | None = None,
     source_version: int | None = None,
+    grid_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Apply unseen events and an authoritative flush snapshot exactly once."""
     rows = [dict(row) for row in state.get(rows_key, [])]
@@ -51,7 +52,9 @@ def apply_reference_payload(
     # A retained component value can belong to the iframe generation that was
     # replaced after a save.  It must not acknowledge events or a flush for
     # the new authoritative database snapshot.
-    if source_version is not None and payload.get("source_version") != source_version:
+    if (grid_id is not None and payload.get("grid_id") != grid_id
+            or source_version is not None
+            and payload.get("source_version") != source_version):
         return rows
     ack_key = f"{editor_key}_component_ack_revision"
     ack = int(state.get(ack_key, 0))
@@ -61,7 +64,9 @@ def apply_reference_payload(
             continue
         row = next((item for item in rows if stable_row_key(item) == raw["row_key"]), None)
         if row is None:
-            continue
+            # Do not acknowledge past a gap: the browser must retain this and
+            # subsequent events until it receives an authoritative source.
+            break
         before = deepcopy(rows)
         field = str(raw["field"])
         row[field] = _decode(raw.get("after"), field, numeric_fields, boolean_fields)
@@ -77,7 +82,10 @@ def apply_reference_payload(
         ack = revision
 
     flush_ack = payload.get("flush_ack")
-    if flush_ack and payload.get("snapshot") is not None:
+    expected_flush = state.get("reference_tables_flush_request")
+    flush_editors = state.get("reference_tables_flush_editors", [])
+    if (flush_ack and flush_ack == expected_flush and editor_key in flush_editors
+            and payload.get("snapshot") is not None):
         snapshot = [
             {field: _decode(value, field, numeric_fields, boolean_fields)
              for field, value in dict(row).items()}
@@ -108,7 +116,7 @@ def apply_reference_payload(
             mark_section_dirty(state, section)
         rows = reconciled
         state[f"{editor_key}_component_flush_ack"] = flush_ack
-    state[ack_key] = max(ack, int(payload.get("client_revision", ack)))
+    state[ack_key] = ack
     state[rows_key] = rows
     return rows
 
@@ -124,7 +132,7 @@ def reference_table(
     state = st.session_state
     version = int(state.get(f"{editor_key}_source_version", 0))
     payload = _component(
-        rows=[dict(row) for row in rows], source_version=version,
+        rows=[dict(row) for row in rows], grid_id=editor_key, source_version=version,
         server_ack_revision=int(state.get(f"{editor_key}_component_ack_revision", 0)),
         flush_token=state.get("reference_tables_flush_request"), columns=columns,
         read_only=read_only, options=options or {}, numeric_fields=list(numeric_fields),
@@ -135,7 +143,7 @@ def reference_table(
         state, payload, rows_key=rows_key, editor_key=editor_key, section=section,
         numeric_fields=numeric_fields, boolean_fields=boolean_fields,
         route_id=route_id, postprocess=postprocess, focus_rows_key=focus_rows_key,
-        source_version=version,
+        source_version=version, grid_id=editor_key,
     )
 
 
