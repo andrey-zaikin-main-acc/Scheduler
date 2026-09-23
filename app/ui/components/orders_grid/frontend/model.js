@@ -5,9 +5,9 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
-  function create(rows, sourceVersion, serverAckRevision) {
+  function create(rows, gridId, sourceVersion, serverAckRevision) {
     const acknowledged = Number(serverAckRevision || 0);
-    return { rows: clone(rows), sourceVersion, revision: acknowledged, ack: acknowledged, pending: [], scrollTop: 0,
+    return { rows: clone(rows), gridId, sourceVersion, revision: acknowledged, ack: acknowledged, pending: [], scrollTop: 0,
       scrollLeft: 0, active: null, draftValue: null, lastFlushedToken: null };
   }
 
@@ -30,8 +30,13 @@
   }
 
   function render(state, args) {
+    if (args.grid_id !== state.gridId) {
+      // A component iframe can be reused for a different Streamlit table.  Its
+      // local state is meaningful only for the table that created it.
+      return create(args.rows, args.grid_id, args.source_version, args.server_ack_revision);
+    }
     if (args.source_version !== state.sourceVersion) {
-      const replacement = create(args.rows, args.source_version, args.server_ack_revision);
+      const replacement = create(args.rows, args.grid_id, args.source_version, args.server_ack_revision);
       replacement.revision = Math.max(state.revision, Number(args.server_ack_revision || 0));
       replacement.ack = Number(args.server_ack_revision || 0);
       // A server snapshot must not make an already acknowledged barrier new
@@ -45,7 +50,7 @@
   }
 
   function payload(state, flushToken) {
-    return { source_version: state.sourceVersion, client_revision: state.revision,
+    return { grid_id: state.gridId, source_version: state.sourceVersion, client_revision: state.revision,
       events: clone(state.pending), snapshot: clone(state.rows),
       flush_ack: flushToken || null };
   }

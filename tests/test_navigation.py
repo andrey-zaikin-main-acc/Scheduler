@@ -158,11 +158,18 @@ def test_real_streamlit_discard_completes_on_next_run_before_navigation_widgets(
     app.session_state["pending_navigation_target"] = target
     app.session_state["requested_page"] = target
     app.session_state[f"{section}_dirty"] = True
+    app.session_state[("routes_page_route_editor_source_version"
+                       if section == "routes" else
+                       "work_centers_page_editor_source_version")] = 6
     app.session_state[draft_key] = [{"ID": 999, "Название": "Черновик"}]
     history = session_history(app.session_state)
     history.record(DraftAction(section, "cell", [], [], (), ("Название",)))
     if section == "routes":
         app.session_state["route_operations_drafts_by_route_id"] = {999: []}
+        app.session_state["routes_page_operation_editor_999_source_version"] = 3
+        app.session_state["routes_page_visible_editors"] = [
+            "routes_page_route_editor", "routes_page_operation_editor_999"
+        ]
         history.record(DraftAction("operations", "cell", [], [], (), ("Участок",)))
 
     app = app.run()
@@ -179,9 +186,14 @@ def test_real_streamlit_discard_completes_on_next_run_before_navigation_widgets(
     assert "pending_navigation_discard_completed" not in app.session_state
     assert draft_key not in app.session_state
     assert app.session_state[f"{section}_dirty"] is False
+    main_version_key = ("routes_page_route_editor_source_version"
+                        if section == "routes" else
+                        "work_centers_page_editor_source_version")
+    assert app.session_state[main_version_key] == 7
     remaining = session_history(app.session_state)
     assert not any(action.section == section for action in remaining.undo_stack + remaining.redo_stack)
     if section == "routes":
+        assert app.session_state["routes_page_operation_editor_999_source_version"] == 4
         assert "route_operations_drafts_by_route_id" not in app.session_state
         assert not any(action.section == "operations"
                        for action in remaining.undo_stack + remaining.redo_stack)

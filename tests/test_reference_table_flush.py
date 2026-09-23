@@ -247,3 +247,60 @@ def test_old_reference_generation_cannot_mutate_rows_revision_or_flush_ack():
     assert "route_component_flush_ack" not in state
     assert not state.get("routes_dirty", False)
     assert not session_history(state).undo_stack
+
+
+def test_route_payload_cannot_mutate_work_center_with_same_id_and_version():
+    state = {
+        "work_centers_draft_rows": [{"ID": 4, "Название": "Участок", "Выбран": False}],
+        "wc_component_ack_revision": 7,
+        "reference_tables_flush_request": "wc-flush",
+        "reference_tables_flush_editors": ["wc"],
+    }
+    payload = {
+        "grid_id": "routes_page_route_editor", "source_version": 3,
+        "client_revision": 8,
+        "events": [{**_event(8, 4, "Название", "Маршрут", "Чужое значение")}],
+        "flush_ack": "wc-flush",
+        "snapshot": [{"ID": 4, "Название": "Чужое значение", "Выбран": True}],
+    }
+
+    rows = apply_reference_payload(
+        state, payload, source_version=3, grid_id="work_centers_page_editor",
+        rows_key="work_centers_draft_rows", editor_key="wc", section="work_centers",
+        numeric_fields={"ID"}, boolean_fields={"Выбран"},
+    )
+
+    assert rows == [{"ID": 4, "Название": "Участок", "Выбран": False}]
+    assert state["wc_component_ack_revision"] == 7
+    assert "wc_component_flush_ack" not in state
+    assert not state.get("work_centers_dirty", False)
+    assert not session_history(state).undo_stack
+
+
+def test_missing_row_does_not_advance_revision_and_old_flush_cannot_ack_new_request():
+    state = {
+        "routes_draft_rows": [{"ID": 1, "Название": "A"}],
+        "route_component_ack_revision": 2,
+        "reference_tables_flush_request": "new-flush",
+        "reference_tables_flush_editors": ["route"],
+    }
+    payload = {
+        "grid_id": "route", "source_version": 1, "client_revision": 4,
+        "events": [
+            _event(3, 999, "Название", "missing", "ignored"),
+            _event(4, 1, "Название", "A", "must remain pending"),
+        ],
+        "flush_ack": "old-flush",
+        "snapshot": [{"ID": 1, "Название": "stale snapshot"}],
+    }
+
+    rows = apply_reference_payload(
+        state, payload, source_version=1, grid_id="route",
+        rows_key="routes_draft_rows", editor_key="route", section="routes",
+        numeric_fields={"ID"}, boolean_fields=set(),
+    )
+
+    assert rows == [{"ID": 1, "Название": "A"}]
+    assert state["route_component_ack_revision"] == 2
+    assert "route_component_flush_ack" not in state
+    assert not session_history(state).undo_stack

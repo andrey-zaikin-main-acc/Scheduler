@@ -19,6 +19,7 @@ DATE_FIELDS = {"Заданная дата запуска", "Заданная д�
 INTEGER_FIELDS = {"ID", "Приоритет", "_draft_id", "_child_sequence_number"}
 NUMBER_FIELDS = {"Тираж"}
 BOOLEAN_FIELDS = {"Выбран", "Связанные заказы", "Запланирован", "Конфликт планирования", "_is_child_order"}
+ORDERS_GRID_ID = "orders_page_editor"
 
 
 def encode_value(field: str, value: Any) -> Any:
@@ -61,6 +62,7 @@ def _decode_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def apply_component_payload(state: Any, payload: dict[str, Any] | None, *,
                             source_version: int | None = None,
+                            grid_id: str | None = None,
                             editable_fields: set[str] | None = None,
                             postprocess: Callable | None = None) -> list[dict[str, Any]]:
     """Apply every unseen semantic event and acknowledge its client revision."""
@@ -71,7 +73,9 @@ def apply_component_payload(state: Any, payload: dict[str, Any] | None, *,
     # an authoritative source replacement it can therefore deliver a payload
     # produced by the previous iframe before the new iframe has rendered.
     # Reject it before touching rows, revisions or flush protocol state.
-    if source_version is not None and payload.get("source_version") != source_version:
+    if (grid_id is not None and payload.get("grid_id") != grid_id
+            or source_version is not None
+            and payload.get("source_version") != source_version):
         return rows
     ack = int(state.get("orders_component_ack_revision", 0))
     for raw in sorted(payload.get("events", []), key=lambda event: int(event["client_revision"])):
@@ -82,10 +86,10 @@ def apply_component_payload(state: Any, payload: dict[str, Any] | None, *,
         key = raw["row_key"]
         row = next((item for item in rows if stable_row_key(item) == key), None)
         if row is None:
-            continue
+            break
         field = str(raw["field"])
         if editable_fields is not None and field not in editable_fields:
-            continue
+            break
         row[field] = decode_value(field, raw.get("after"))
         if postprocess is not None:
             rows = postprocess(before, rows)
@@ -139,7 +143,7 @@ def apply_component_payload(state: Any, payload: dict[str, Any] | None, *,
             ))
         rows = reconciled
         state["orders_component_flush_ack"] = flush_ack
-    state["orders_component_ack_revision"] = max(ack, int(payload.get("client_revision", ack)))
+    state["orders_component_ack_revision"] = ack
     state["orders_draft_rows"] = rows
     return rows
 
@@ -165,17 +169,20 @@ def orders_component(rows: list[dict[str, Any]], *, source_version: int, columns
                                "client_revision": revision,
                                "action_type": "selection" if field == "Выбран" else "cell"})
         rows = apply_component_payload(st.session_state, {
+            "grid_id": ORDERS_GRID_ID, "source_version": source_version,
             "client_revision": revision, "events": events,
-        }, editable_fields=set(columns) - set(read_only), postprocess=postprocess)
+        }, source_version=source_version, grid_id=ORDERS_GRID_ID,
+           editable_fields=set(columns) - set(read_only), postprocess=postprocess)
     flush_token = st.session_state.get("orders_component_flush_request")
     component_rows = [_encode_row(dict(row)) for row in rows]
     payload = _component(
         rows=component_rows, source_version=source_version,
+        grid_id=ORDERS_GRID_ID,
         server_ack_revision=int(st.session_state.get("orders_component_ack_revision", 0)),
         flush_token=flush_token, columns=columns, read_only=read_only, options=options,
         key="orders_browser_grid", default=None,
     )
     return apply_component_payload(
-        st.session_state, payload, source_version=source_version,
+        st.session_state, payload, source_version=source_version, grid_id=ORDERS_GRID_ID,
         editable_fields=set(columns) - set(read_only), postprocess=postprocess,
     )
