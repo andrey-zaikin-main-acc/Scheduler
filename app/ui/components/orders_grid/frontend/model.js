@@ -39,7 +39,8 @@
   }
 
   function payload(state, flushToken) {
-    return { client_revision: state.revision, events: clone(state.pending), snapshot: clone(state.rows),
+    return { source_version: state.sourceVersion, client_revision: state.revision,
+      events: clone(state.pending), snapshot: clone(state.rows),
       flush_ack: flushToken || null };
   }
   function flushActive(state, key, field, after, actionType, flushToken) {

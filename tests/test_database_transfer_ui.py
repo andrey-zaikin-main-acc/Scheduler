@@ -34,6 +34,24 @@ def test_clean_state_does_not_block_database_transfer() -> None:
     assert not _has_unsaved_changes({})
 
 
+def test_clean_completed_probe_opens_import_picker(monkeypatch, tmp_path) -> None:
+    selected = tmp_path / "current.drawppt"
+    state = {
+        "database_transfer_action": "select_import",
+        "database_transfer_probe_pending": True,
+        "database_transfer_probe_completed": True,
+        "database_transfer_probe_page": "Производственный план",
+    }
+    monkeypatch.setattr(common, "st", SimpleNamespace(session_state=state))
+    monkeypatch.setattr(common, "choose_import_file", lambda: selected)
+    monkeypatch.setattr(common, "validate_transfer_file", lambda path: {"path": str(path)})
+
+    common._perform_pending_transfer_action()
+
+    assert state["database_transfer_selected_file"] == str(selected)
+    assert "database_transfer_flash" not in state
+
+
 def test_nonempty_author_enables_export_and_survives_rerun() -> None:
     app = AppTest.from_file("app/main.py", default_timeout=20).run()
     author = next(field for field in app.text_input if field.label == "Автор выгрузки")

@@ -20,6 +20,7 @@ assert.equal(state.scrollTop, 0); assert.equal(state.active, null);
 let active = M.create([{ID: 9, Name: "before"}], 1);
 active.active = {key: 9, field: "Name"}; active.draftValue = "visible active value";
 const flushed = M.flushActive(active, 9, "Name", active.draftValue, "cell", "save-1");
+assert.equal(flushed.source_version, 1, "payload identifies the source generation");
 assert.equal(flushed.flush_ack, "save-1");
 assert.equal(flushed.snapshot[0].Name, "visible active value", "flush commits the active input");
 assert.equal(flushed.events.length, 1, "flush emits the business edit exactly once");

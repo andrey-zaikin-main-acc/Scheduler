@@ -13,6 +13,7 @@ from app.ui.components.orders_component import (
 )
 from app.ui.components.tables import order_rows
 from app.ui.pages.orders_page import reconcile_linked_groups
+from app.ui.pages.common import _has_unsaved_changes
 
 
 def event(revision, key, field, before, after, action="cell"):
@@ -132,7 +133,8 @@ def test_linked_group_event_remains_one_atomic_action():
 
 
 def test_flush_snapshot_decodes_date_before_bundle_creation():
-    state = {"orders_draft_rows": [{"_draft_id": -1, "Заданная дата отгрузки": date(2026, 8, 14)}]}
+    state = {"orders_draft_rows": [{"_draft_id": -1, "Заданная дата отгрузки": date(2026, 8, 14)}],
+             "orders_component_flush_request": "token"}
     rows = apply_component_payload(state, {"client_revision": 1, "events": [], "flush_ack": "token",
         "snapshot": [{"_draft_id": -1, "Заданная дата отгрузки": "2026-08-12", "Выбран": False, "Тираж": 1000}]})
     assert rows[0]["Заданная дата отгрузки"] == date(2026, 8, 12)
@@ -142,7 +144,7 @@ def test_flush_snapshot_decodes_date_before_bundle_creation():
 def test_active_cell_flush_snapshot_is_recorded_as_unsaved_change():
     state = {"orders_draft_rows": [
         {"ID": 7, "Клиент": "До редактирования", "Выбран": False}
-    ]}
+    ], "orders_component_flush_request": "export-token"}
 
     rows = apply_component_payload(state, {
         "client_revision": 0,
@@ -157,3 +159,60 @@ def test_active_cell_flush_snapshot_is_recorded_as_unsaved_change():
     assert action.section == "orders"
     assert action.action_type == "snapshot"
     assert action.fields == ("Клиент",)
+
+
+def test_old_generation_payload_cannot_restore_saved_rows_or_ack_new_flush():
+    columns = {"Клиент", "Выбран"}
+    state = {
+        "orders_draft_rows": [{"ID": 7, "Клиент": "До", "Выбран": False}],
+        "orders_component_flush_request": "save-1",
+    }
+    current = {"source_version": 4, "client_revision": 1,
+               "events": [event(1, 7, "Клиент", "До", "После")],
+               "flush_ack": "save-1",
+               "snapshot": [{"ID": 7, "Клиент": "После", "Выбран": False}]}
+    apply_component_payload(state, current, source_version=4, editable_fields=columns)
+    assert state["orders_draft_rows"][0]["Клиент"] == "После"
+    assert state["orders_component_flush_ack"] == "save-1"
+
+    # Model the successful commit/reload performed by commit_all_session_drafts.
+    session_history(state).clear_section("orders")
+    state["orders_draft_rows"] = [{"ID": 7, "Клиент": "Из базы", "Выбран": False}]
+    state.pop("orders_component_ack_revision")
+    state.pop("orders_component_flush_ack")
+    state["orders_component_flush_request"] = "load-probe"
+
+    apply_component_payload(state, current, source_version=5, editable_fields=columns)
+
+    assert state["orders_draft_rows"][0]["Клиент"] == "Из базы"
+    assert not session_history(state).undo_stack
+    assert "orders_component_ack_revision" not in state
+    assert "orders_component_flush_ack" not in state
+    assert not _has_unsaved_changes(state)
+
+    new_payload = {"source_version": 5, "client_revision": 1,
+                   "events": [event(1, 7, "Клиент", "Из базы", "Новое")]}
+    apply_component_payload(state, new_payload, source_version=5, editable_fields=columns)
+    assert state["orders_draft_rows"][0]["Клиент"] == "Новое"
+    assert len(session_history(state).undo_stack) == 1
+
+
+def test_flush_ignores_readonly_snapshot_changes_and_requires_current_token():
+    editable = {"Клиент", "Выбран"}
+    state = {
+        "orders_draft_rows": [{"ID": 7, "Клиент": "A", "Расчёт": 10, "Выбран": False}],
+        "orders_component_flush_request": "new-token",
+    }
+    payload = {"source_version": 2, "client_revision": 0, "events": [],
+               "flush_ack": "old-token",
+               "snapshot": [{"ID": 7, "Клиент": "A", "Расчёт": 99, "Выбран": False}]}
+    apply_component_payload(state, payload, source_version=2, editable_fields=editable)
+    assert state["orders_draft_rows"][0]["Расчёт"] == 10
+    assert "orders_component_flush_ack" not in state
+    assert not session_history(state).undo_stack
+
+    payload["flush_ack"] = "new-token"
+    apply_component_payload(state, payload, source_version=2, editable_fields=editable)
+    assert state["orders_component_flush_ack"] == "new-token"
+    assert state["orders_draft_rows"][0]["Расчёт"] == 10
+    assert not session_history(state).undo_stack
