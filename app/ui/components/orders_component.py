@@ -60,10 +60,18 @@ def _decode_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def apply_component_payload(state: Any, payload: dict[str, Any] | None, *,
+                            source_version: int | None = None,
+                            editable_fields: set[str] | None = None,
                             postprocess: Callable | None = None) -> list[dict[str, Any]]:
     """Apply every unseen semantic event and acknowledge its client revision."""
     rows = [dict(row) for row in state.get("orders_draft_rows", [])]
     if not payload:
+        return rows
+    # Streamlit retains a component's last value under its widget key.  After
+    # an authoritative source replacement it can therefore deliver a payload
+    # produced by the previous iframe before the new iframe has rendered.
+    # Reject it before touching rows, revisions or flush protocol state.
+    if source_version is not None and payload.get("source_version") != source_version:
         return rows
     ack = int(state.get("orders_component_ack_revision", 0))
     for raw in sorted(payload.get("events", []), key=lambda event: int(event["client_revision"])):
@@ -76,6 +84,8 @@ def apply_component_payload(state: Any, payload: dict[str, Any] | None, *,
         if row is None:
             continue
         field = str(raw["field"])
+        if editable_fields is not None and field not in editable_fields:
+            continue
         row[field] = decode_value(field, raw.get("after"))
         if postprocess is not None:
             rows = postprocess(before, rows)
@@ -87,8 +97,24 @@ def apply_component_payload(state: Any, payload: dict[str, Any] | None, *,
         ack = revision
     # A flush snapshot is authoritative for edits already made in the iframe,
     # including a change event delivered in the same browser turn as the click.
-    if payload.get("flush_ack") and payload.get("snapshot"):
+    flush_ack = payload.get("flush_ack")
+    expected_flush = state.get("orders_component_flush_request")
+    if flush_ack and flush_ack == expected_flush and payload.get("snapshot") is not None:
         snapshot = [_decode_row(dict(row)) for row in payload["snapshot"]]
+        if editable_fields is not None:
+            snapshot_by_key = {stable_row_key(row): row for row in snapshot}
+            snapshot = [
+                {
+                    **row,
+                    **{
+                        field: incoming[field]
+                        for field in editable_fields
+                        if field in incoming
+                    },
+                }
+                for row in rows
+                if (incoming := snapshot_by_key.get(stable_row_key(row))) is not None
+            ]
         reconciled = postprocess(rows, snapshot) if postprocess is not None else snapshot
         # The browser snapshot is authoritative at a flush barrier.  Normally
         # the matching change event was handled above, but an input that is
@@ -101,7 +127,8 @@ def apply_component_payload(state: Any, payload: dict[str, Any] | None, *,
             old = old_by_key.get(stable_row_key(row), {})
             business_fields.update(
                 field for field, value in row.items()
-                if field not in {"Выбран", "_draft_id"} and old.get(field) != value
+                if (editable_fields is None or field in editable_fields)
+                and field != "Выбран" and old.get(field) != value
             )
         if business_fields and not state.get("draft_history_replay_in_progress"):
             session_history(state).record(DraftAction(
@@ -111,7 +138,7 @@ def apply_component_payload(state: Any, payload: dict[str, Any] | None, *,
                 focus={"session_key": "orders_draft_rows"},
             ))
         rows = reconciled
-        state["orders_component_flush_ack"] = payload["flush_ack"]
+        state["orders_component_flush_ack"] = flush_ack
     state["orders_component_ack_revision"] = max(ack, int(payload.get("client_revision", ack)))
     state["orders_draft_rows"] = rows
     return rows
@@ -139,7 +166,7 @@ def orders_component(rows: list[dict[str, Any]], *, source_version: int, columns
                                "action_type": "selection" if field == "Выбран" else "cell"})
         rows = apply_component_payload(st.session_state, {
             "client_revision": revision, "events": events,
-        }, postprocess=postprocess)
+        }, editable_fields=set(columns) - set(read_only), postprocess=postprocess)
     flush_token = st.session_state.get("orders_component_flush_request")
     component_rows = [_encode_row(dict(row)) for row in rows]
     payload = _component(
@@ -148,4 +175,7 @@ def orders_component(rows: list[dict[str, Any]], *, source_version: int, columns
         flush_token=flush_token, columns=columns, read_only=read_only, options=options,
         key="orders_browser_grid", default=None,
     )
-    return apply_component_payload(st.session_state, payload, postprocess=postprocess)
+    return apply_component_payload(
+        st.session_state, payload, source_version=source_version,
+        editable_fields=set(columns) - set(read_only), postprocess=postprocess,
+    )
