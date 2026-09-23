@@ -42,10 +42,16 @@ def apply_reference_payload(
     route_id: int | None = None,
     focus_rows_key: str | None = None,
     postprocess: Callable | None = None,
+    source_version: int | None = None,
 ) -> list[dict[str, Any]]:
     """Apply unseen events and an authoritative flush snapshot exactly once."""
     rows = [dict(row) for row in state.get(rows_key, [])]
     if not payload:
+        return rows
+    # A retained component value can belong to the iframe generation that was
+    # replaced after a save.  It must not acknowledge events or a flush for
+    # the new authoritative database snapshot.
+    if source_version is not None and payload.get("source_version") != source_version:
         return rows
     ack_key = f"{editor_key}_component_ack_revision"
     ack = int(state.get(ack_key, 0))
@@ -112,7 +118,7 @@ def reference_table(
     columns: list[str], read_only: list[str], numeric_fields: set[str],
     boolean_fields: set[str], options: dict[str, list[str]] | None = None,
     route_id: int | None = None, postprocess: Callable | None = None,
-    focus_rows_key: str | None = None,
+    focus_rows_key: str | None = None, single_selection: bool = False,
 ) -> list[dict[str, Any]]:
     """Render a reference grid without letting a Python rerun own its input."""
     state = st.session_state
@@ -122,12 +128,14 @@ def reference_table(
         server_ack_revision=int(state.get(f"{editor_key}_component_ack_revision", 0)),
         flush_token=state.get("reference_tables_flush_request"), columns=columns,
         read_only=read_only, options=options or {}, numeric_fields=list(numeric_fields),
-        boolean_fields=list(boolean_fields), key=f"{editor_key}_browser", default=None,
+        boolean_fields=list(boolean_fields), single_selection=single_selection,
+        key=f"{editor_key}_browser", default=None,
     )
     return apply_reference_payload(
         state, payload, rows_key=rows_key, editor_key=editor_key, section=section,
         numeric_fields=numeric_fields, boolean_fields=boolean_fields,
         route_id=route_id, postprocess=postprocess, focus_rows_key=focus_rows_key,
+        source_version=version,
     )
 
 

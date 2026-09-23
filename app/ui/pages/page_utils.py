@@ -67,19 +67,25 @@ def commit_all_session_drafts(*, sections: set[str] | None = None, message_targe
                                  "work_centers_page_has_draft_row", "work_centers_page_selected_id"},
             }
             old_order_source_version = int(st.session_state.get("orders_page_editor_source_version", 0))
+            # A successful reference save makes SQLite the authoritative source.
+            # Advance every affected browser generation before its draft and
+            # protocol acknowledgements are cleared, so permanent IDs replace
+            # temporary draft keys on the very next render.
+            reference_editors = advance_saved_reference_sources(
+                st.session_state, selected_sections
+            )
+
             clear_keys = set().union(*(section_keys[name] for name in selected_sections))
             for key in list(st.session_state):
-                if (key in clear_keys or ("routes" in selected_sections and key.startswith("routes_page_operation_editor_"))
+                if (key in clear_keys or ("routes" in selected_sections
+                        and key.startswith("routes_page_operation_editor_")
+                        and not key.endswith("_source_version"))
                         or ("orders" in selected_sections and (key.startswith("order_mode_") or key.startswith("order_date_")))):
                     st.session_state.pop(key, None)
             # Component protocol state is no longer meaningful after the DB
             # snapshot becomes authoritative.
             for key in list(st.session_state):
-                if any(key.startswith(f"{editor}_component_") for editor in (
-                    "routes_page_route_editor", "work_centers_page_editor",
-                )):
-                    st.session_state.pop(key, None)
-                if key.startswith("routes_page_operation_editor_") and "_component_" in key:
+                if any(key.startswith(f"{editor}_component_") for editor in reference_editors):
                     st.session_state.pop(key, None)
                 if "routes" in selected_sections and key.startswith("route_operations_draft_rows_"):
                     st.session_state.pop(key, None)
@@ -100,6 +106,28 @@ def commit_all_session_drafts(*, sections: set[str] | None = None, message_targe
         for error in result.errors:
             target.error(error)
         return False
+
+
+def advance_saved_reference_sources(state, selected_sections: set[str]) -> set[str]:
+    """Advance browser generations whose rows were replaced by a successful save."""
+    editors: set[str] = set()
+    if "routes" in selected_sections:
+        editors.add("routes_page_route_editor")
+        editors.update(
+            str(key) for key in state.get("routes_page_visible_editors", [])
+            if str(key).startswith("routes_page_operation_editor_")
+        )
+        editors.update(
+            key.removesuffix("_source_version") for key in state
+            if key.startswith("routes_page_operation_editor_")
+            and key.endswith("_source_version")
+        )
+    if "work_centers" in selected_sections:
+        editors.add("work_centers_page_editor")
+    for editor in editors:
+        version_key = f"{editor}_source_version"
+        state[version_key] = int(state.get(version_key, 0)) + 1
+    return editors
 
 
 def normalize_date_range(value: object, default_start: date, default_end: date) -> tuple[date, date]:

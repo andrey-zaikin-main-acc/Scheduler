@@ -28,7 +28,7 @@ function makeEditor(row,field,key){let el;
   el.dataset.key=key;el.dataset.field=field;
   el.addEventListener("focus",()=>{state.active={key,field};state.draftValue=el.value});
   el.addEventListener("input",()=>{state.draftValue=el.value});
-  el.addEventListener("change",()=>{const after=parse(el,field);M.edit(state,key,field,after,field==="Выбран"?"selection":el.type==="checkbox"?"checkbox":"cell");state.draftValue=null;value(null)});
+  el.addEventListener("change",()=>{const after=parse(el,field);M.edit(state,key,field,after,field==="Выбран"?"selection":el.type==="checkbox"?"checkbox":"cell",!!args.single_selection);state.draftValue=null;value(null);if(field==="Выбран"&&args.single_selection)draw()});
   return el}
 function makeRenderer(row,field){
   if(booleanFields().has(field)){const el=document.createElement("input");el.type="checkbox";el.checked=!!row[field];el.disabled=true;el.setAttribute("aria-label",field);return el}
@@ -41,6 +41,6 @@ function draw(){const host=document.getElementById("grid"),old=host.querySelecto
   for(const row of state.rows){const tr=document.createElement("tr"),key=M.rowKey(row);for(const field of args.columns){const td=document.createElement("td"),readOnly=readOnlyFields.includes(field);if(readOnly)td.className="readonly";else if(accentField(field))td.className="col-editable";td.dataset.kind=V.cellKind(field,readOnly,(args.options||{})[field]);td.appendChild(readOnly?makeRenderer(row,field):makeEditor(row,field,key));tr.appendChild(td)}body.appendChild(tr)}table.appendChild(body);viewport.appendChild(table);host.appendChild(viewport);viewport.scrollTop=state.scrollTop;viewport.scrollLeft=state.scrollLeft;
   if(state.active){const el=viewport.querySelector(`[data-key="${state.active.key}"][data-field="${CSS.escape(state.active.field)}"]`);if(el){el.focus({preventScroll:true});if(state.draftValue!==null)el.value=state.draftValue}}
   requestAnimationFrame(()=>post("streamlit:setFrameHeight",{height:V.frameHeight(viewport)}))}
-window.addEventListener("message",event=>{if(event.data.type!=="streamlit:render")return;args=event.data.args;applyTheme(event.data.theme);if(!state)state=M.create(args.rows,args.source_version);else state=M.render(state,args);draw();if(M.claimFlush(state,args.flush_token))post("streamlit:setComponentValue",{value:flushValue(args.flush_token),dataType:"json"})});
+window.addEventListener("message",event=>{if(event.data.type!=="streamlit:render")return;args=event.data.args;applyTheme(event.data.theme);if(!state)state=M.create(args.rows,args.source_version,args.server_ack_revision);else state=M.render(state,args);draw();if(M.claimFlush(state,args.flush_token))post("streamlit:setComponentValue",{value:flushValue(args.flush_token),dataType:"json"})});
 post("streamlit:componentReady",{apiVersion:1});post("streamlit:setFrameHeight",{height:0});
 </script></body></html>

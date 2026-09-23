@@ -5,18 +5,24 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
-  function create(rows, sourceVersion) {
-    return { rows: clone(rows), sourceVersion, revision: 0, ack: 0, pending: [], scrollTop: 0,
+  function create(rows, sourceVersion, serverAckRevision) {
+    const acknowledged = Number(serverAckRevision || 0);
+    return { rows: clone(rows), sourceVersion, revision: acknowledged, ack: acknowledged, pending: [], scrollTop: 0,
       scrollLeft: 0, active: null, draftValue: null, lastFlushedToken: null };
   }
 
   function rowKey(row) { return Number.isInteger(row.ID) ? row.ID : row._draft_id; }
 
-  function edit(state, key, field, after, actionType) {
+  function edit(state, key, field, after, actionType, singleSelection) {
     const row = state.rows.find(item => rowKey(item) === key);
     if (!row || row[field] === after) return state;
     const before = row[field] === undefined ? null : row[field];
     row[field] = after;
+    if (singleSelection && field === "Выбран" && after) {
+      for (const other of state.rows) {
+        if (rowKey(other) !== key) other[field] = false;
+      }
+    }
     state.revision += 1;
     state.pending.push({ row_key: key, field, before, after,
       client_revision: state.revision, action_type: actionType || "cell" });
@@ -25,7 +31,7 @@
 
   function render(state, args) {
     if (args.source_version !== state.sourceVersion) {
-      const replacement = create(args.rows, args.source_version);
+      const replacement = create(args.rows, args.source_version, args.server_ack_revision);
       replacement.revision = Math.max(state.revision, Number(args.server_ack_revision || 0));
       replacement.ack = Number(args.server_ack_revision || 0);
       // A server snapshot must not make an already acknowledged barrier new

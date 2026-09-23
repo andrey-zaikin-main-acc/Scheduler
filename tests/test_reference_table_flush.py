@@ -221,3 +221,29 @@ def test_active_and_blurred_work_center_edits_persist_the_same_sqlite_value():
                 DraftBundle(work_centers=rows), "work_centers"
             ).ok
             assert db.get(WorkCenter, wc.id).available_hours_per_day == 200
+
+
+def test_old_reference_generation_cannot_mutate_rows_revision_or_flush_ack():
+    state = {
+        "routes_draft_rows": [{"ID": 4, "Название": "Из базы", "Выбран": False}],
+        "route_component_ack_revision": 12,
+    }
+    payload = {
+        "source_version": 2,
+        "client_revision": 13,
+        "events": [{**_event(13, 4, "Название", "Старое", "Устаревшее")}],
+        "flush_ack": "old-flush",
+        "snapshot": [{"ID": 4, "Название": "Устаревшее", "Выбран": True}],
+    }
+
+    rows = apply_reference_payload(
+        state, payload, source_version=3, rows_key="routes_draft_rows",
+        editor_key="route", section="routes", numeric_fields={"ID"},
+        boolean_fields={"Выбран"},
+    )
+
+    assert rows == [{"ID": 4, "Название": "Из базы", "Выбран": False}]
+    assert state["route_component_ack_revision"] == 12
+    assert "route_component_flush_ack" not in state
+    assert not state.get("routes_dirty", False)
+    assert not session_history(state).undo_stack

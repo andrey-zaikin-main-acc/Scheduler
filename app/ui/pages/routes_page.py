@@ -101,6 +101,7 @@ def render_routes_page() -> None:
             route_rows_data, editor_key=ROUTE_EDITOR_KEY, rows_key="routes_draft_rows",
             section="routes", columns=ROUTE_COLUMNS, read_only=["ID", "Операций"],
             numeric_fields={"ID", "Операций"}, boolean_fields={"Выбран", "Активен"},
+            single_selection=True,
         )
         edited_routes, selected_route_id, selection_changed = reconcile_single_selection(
             route_rows_data, edited_routes, previous_id=selected_route_id
@@ -182,7 +183,7 @@ def _render_operations_table(
         columns=OPERATION_COLUMNS, read_only=["ID"], route_id=route.id,
         numeric_fields={"ID", "№", "Трудоёмкость на 1000", "Мин. передаточная партия"},
         boolean_fields={"Выбран", "Активна"}, options={"Участок": list(work_center_by_name)},
-        focus_rows_key="route_operations_drafts_by_route_id",
+        focus_rows_key="route_operations_drafts_by_route_id", single_selection=True,
     )
     edited_rows, selected_operation_id, selection_changed = reconcile_single_selection(
         rows, edited_rows, previous_id=selected_operation_id
