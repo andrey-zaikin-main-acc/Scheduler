@@ -13,7 +13,9 @@ input[type=checkbox]{min-width:18px;width:18px;accent-color:var(--primary)}
 th.col-editable{border-left:3px solid var(--primary)}td.col-editable{border-left:3px solid color-mix(in srgb,var(--primary) 45%,var(--background))}
 th.col-locked{color:color-mix(in srgb,var(--text) 62%,var(--background));font-style:italic}
 </style></head><body><div id="grid"></div><script src="model.js"></script><script src="view.js"></script><script>
-const M=OrdersGridModel,V=OrdersGridView;let state=null,args=null;
+const M=OrdersGridModel,V=OrdersGridView;let state=null,args=null,currentViewport=null,displaySignature=null;
+let heightFrame=null,lastFrameHeight=null;
+let heightObserver=null;
 function booleanFields(){return new Set(args.boolean_fields||Array.from(V.BOOLEAN_FIELDS))}
 function numericFields(){return new Set(args.numeric_fields||Array.from(V.NUMERIC_FIELDS))}
 function post(type,data){parent.postMessage(Object.assign({isStreamlitMessage:true,type},data||{}),"*")}
@@ -28,19 +30,26 @@ function makeEditor(row,field,key){let el;
   el.dataset.key=key;el.dataset.field=field;
   el.addEventListener("focus",()=>{state.active={key,field};state.draftValue=el.value});
   el.addEventListener("input",()=>{state.draftValue=el.value});
-  el.addEventListener("change",()=>{const after=parse(el,field);M.edit(state,key,field,after,field==="Выбран"?"selection":el.type==="checkbox"?"checkbox":"cell",!!args.single_selection);state.draftValue=null;value(null);if(field==="Выбран"&&args.single_selection)draw()});
+  el.addEventListener("change",()=>{const after=parse(el,field);M.edit(state,key,field,after,field==="Выбран"?"selection":el.type==="checkbox"?"checkbox":"cell",!!args.single_selection);state.draftValue=null;if(field==="Выбран"&&args.single_selection)syncSelectionCheckboxes();value(null)});
   return el}
 function makeRenderer(row,field){
   if(booleanFields().has(field)){const el=document.createElement("input");el.type="checkbox";el.checked=!!row[field];el.disabled=true;el.setAttribute("aria-label",field);return el}
   const el=document.createElement("span");el.className="readonly-display";el.textContent=V.DATE_FIELDS.has(field)?V.formatDate(row[field]):(row[field]??"");return el}
 function applyTheme(theme){for(const [name,value] of Object.entries(V.themeVars(theme)))document.documentElement.style.setProperty(name,value)}
-function draw(){const host=document.getElementById("grid"),old=host.querySelector(".viewport");if(old){state.scrollTop=old.scrollTop;state.scrollLeft=old.scrollLeft}
+function syncSelectionCheckboxes(){for(const row of state.rows){const key=M.rowKey(row),el=currentViewport&&currentViewport.querySelector(`[data-key="${key}"][data-field="Выбран"]`);if(el)el.checked=!!row["Выбран"]}}
+function scheduleFrameHeight(viewport){if(viewport!==currentViewport||heightFrame!==null)return;heightFrame=requestAnimationFrame(()=>{heightFrame=null;const host=document.getElementById("grid");if(viewport!==currentViewport||!viewport.isConnected||!host.contains(viewport))return;const height=V.frameHeight(viewport);if(height!==lastFrameHeight){lastFrameHeight=height;post("streamlit:setFrameHeight",{height})}})}
+function draw(){const host=document.getElementById("grid"),old=currentViewport;if(old){state.scrollTop=old.scrollTop;state.scrollLeft=old.scrollLeft}
+  if(heightFrame!==null){cancelAnimationFrame(heightFrame);heightFrame=null}
+  if(heightObserver){heightObserver.disconnect();heightObserver=null}
   host.textContent="";const viewport=document.createElement("div");viewport.className="viewport";const table=document.createElement("table"),head=document.createElement("thead"),hr=document.createElement("tr");
   const readOnlyFields=(args.read_only||[]);const accentField=f=>!readOnlyFields.includes(f)&&f!=="Выбран";
   for(const field of args.columns){const th=document.createElement("th");const locked=readOnlyFields.includes(field);th.textContent=locked?("🔒 "+field):field;if(locked)th.className="col-locked";else if(accentField(field))th.className="col-editable";hr.appendChild(th)}head.appendChild(hr);table.appendChild(head);const body=document.createElement("tbody");
   for(const row of state.rows){const tr=document.createElement("tr"),key=M.rowKey(row);for(const field of args.columns){const td=document.createElement("td"),readOnly=readOnlyFields.includes(field);if(readOnly)td.className="readonly";else if(accentField(field))td.className="col-editable";td.dataset.kind=V.cellKind(field,readOnly,(args.options||{})[field]);td.appendChild(readOnly?makeRenderer(row,field):makeEditor(row,field,key));tr.appendChild(td)}body.appendChild(tr)}table.appendChild(body);viewport.appendChild(table);host.appendChild(viewport);viewport.scrollTop=state.scrollTop;viewport.scrollLeft=state.scrollLeft;
+  currentViewport=viewport;
+  if(typeof ResizeObserver!=="undefined"){heightObserver=new ResizeObserver(()=>scheduleFrameHeight(viewport));heightObserver.observe(viewport)}
   if(state.active){const el=viewport.querySelector(`[data-key="${state.active.key}"][data-field="${CSS.escape(state.active.field)}"]`);if(el){el.focus({preventScroll:true});if(state.draftValue!==null)el.value=state.draftValue}}
-  requestAnimationFrame(()=>post("streamlit:setFrameHeight",{height:V.frameHeight(viewport)}))}
-window.addEventListener("message",event=>{if(event.data.type!=="streamlit:render")return;args=event.data.args;applyTheme(event.data.theme);if(!state)state=M.create(args.rows,args.grid_id,args.source_version,args.server_ack_revision);else state=M.render(state,args);draw();if(M.claimFlush(state,args.flush_token))post("streamlit:setComponentValue",{value:flushValue(args.flush_token),dataType:"json"})});
+  scheduleFrameHeight(viewport)}
+window.addEventListener("resize",()=>scheduleFrameHeight(currentViewport));
+window.addEventListener("message",event=>{if(event.data.type!=="streamlit:render")return;args=event.data.args;applyTheme(event.data.theme);const previousState=state;state=state?M.render(state,args):M.create(args.rows,args.grid_id,args.source_version,args.server_ack_revision);const nextSignature=V.displaySignature(args);if(!currentViewport||state!==previousState||nextSignature!==displaySignature){displaySignature=nextSignature;draw()}else scheduleFrameHeight(currentViewport);if(M.claimFlush(state,args.flush_token))post("streamlit:setComponentValue",{value:flushValue(args.flush_token),dataType:"json"})});
 post("streamlit:componentReady",{apiVersion:1});post("streamlit:setFrameHeight",{height:0});
 </script></body></html>
