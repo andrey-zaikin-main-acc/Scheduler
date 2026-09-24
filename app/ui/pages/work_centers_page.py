@@ -53,9 +53,8 @@ def render_work_centers_page() -> None:
             mark_section_dirty(st.session_state, "work_centers")
             replace_table_source(EDITOR_KEY)
             st.rerun()
-        selected = [row for row in st.session_state.work_centers_draft_rows if row.get("Выбран")]
-        if delete_col.button("Удалить участок", disabled=not selected):
-            st.warning("Участки не удаляются физически. Снимите флаг «Активен» и сохраните раздел.")
+        delete_button = delete_col.empty()
+        delete_warning = st.empty()
         edited = reference_table(
             st.session_state.work_centers_draft_rows, editor_key=EDITOR_KEY,
             rows_key="work_centers_draft_rows", section="work_centers",
@@ -64,6 +63,9 @@ def render_work_centers_page() -> None:
             boolean_fields={"Выбран", "Активен", "Нельзя прерывать заказ при планировании"},
         )
         st.session_state.work_centers_draft_rows = edited
+        selected = [row for row in edited if row.get("Выбран")]
+        if delete_button.button("Удалить участок", disabled=not selected):
+            delete_warning.warning("Участки не удаляются физически. Снимите флаг «Активен» и сохраните раздел.")
         if (st.button("Сохранить изменения", use_container_width=True)
                 and not st.session_state.get("navigation_probe_pending")):
             request_reference_save(
