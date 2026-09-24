@@ -45,5 +45,25 @@
     return Math.ceil(viewport.getBoundingClientRect().height) + 2;
   }
 
-  return {BOOLEAN_FIELDS, DATE_FIELDS, NUMERIC_FIELDS, cellKind, formatDate, themeVars, frameHeight};
+  function displaySignature(args) {
+    args = args || {};
+    const sorted = values => Array.from(values || []).sort();
+    const options = {};
+    for (const field of args.columns || []) {
+      if (Object.prototype.hasOwnProperty.call(args.options || {}, field)) {
+        options[field] = args.options[field];
+      }
+    }
+    return JSON.stringify({
+      columns: args.columns || [],
+      readOnly: sorted(args.read_only),
+      booleanFields: sorted(args.boolean_fields || BOOLEAN_FIELDS),
+      numericFields: sorted(args.numeric_fields || NUMERIC_FIELDS),
+      options,
+      singleSelection: !!args.single_selection,
+    });
+  }
+
+  return {BOOLEAN_FIELDS, DATE_FIELDS, NUMERIC_FIELDS, cellKind, formatDate, themeVars, frameHeight,
+    displaySignature};
 });
